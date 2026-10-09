@@ -1,0 +1,68 @@
+name: sync models
+
+# Copies extra weights into the Hugging Face repo the endpoint caches
+# (GloriaWang23/h3-comfy-runtime) and removes files the worker image no longer needs, in one
+# commit. Endpoints pin a commit, so nothing changes for them until their model reference
+# and H3_MODEL_SHA are moved to the commit this prints.
+# Needs the repository secret HF_TOKEN (write access to the target repo).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TARGET: GloriaWang23/h3-comfy-runtime
+    steps:
+      # FastH3 is 22 GB; the runner's /mnt scratch disk has room for it.
+      - name: Disk
+        run: df -h / /mnt
+
+      - run: pip install -q -U "huggingface_hub[hf_xet]"
+
+      - name: Download, then commit add + deletes
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        shell: python
+        run: |
+          import os
+          from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi, hf_hub_download
+
+          ADD = [
+              # (source repo, file, path in target)
+              ("FastVideo/FastVideo-FastH3-Comfy",
+               "diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
+               "diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors"),
+          ]
+          # The old start path (boot.sh + runtime overlay + handler copy) is baked into the
+          # worker image now; pinned older commits keep these files for rollback.
+          DELETE = ["boot.sh", "h3_handler.py", "runtime/"]
+
+          api = HfApi()
+          target = os.environ["TARGET"]
+          present = set(api.list_repo_files(target))
+          ops = []
+          for repo, src, dest in ADD:
+              if dest in present:
+                  print(f"already present: {dest}")
+                  continue
+              path = hf_hub_download(repo, src, local_dir="/mnt/models")
+              print(f"downloaded {src}: {os.path.getsize(path) / 1e9:.1f} GB")
+              ops.append(CommitOperationAdd(path_in_repo=dest, path_or_fileobj=path))
+          for p in DELETE:
+              if p in present or any(f.startswith(p) for f in present if p.endswith("/")):
+                  ops.append(CommitOperationDelete(path_in_repo=p))
+          if not ops:
+              print("nothing to do")
+          else:
+              info = api.create_commit(target, operations=ops,
+                                       commit_message="Add FastH3 8-step v2; drop the old boot runtime")
+              print(f"NEW COMMIT {info.oid}")
+          print("files now:")
+          for f in api.list_repo_tree(target, recursive=True):
+              if getattr(f, "size", None):
+                  print(f"  {f.path}  {f.size / 1e9:.2f} GB")
