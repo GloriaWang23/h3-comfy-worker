@@ -20,7 +20,9 @@ jobs:
     steps:
       # FastH3 is 22 GB; the runner's /mnt scratch disk has room for it.
       - name: Disk
-        run: df -h / /mnt
+        run: |
+          sudo mkdir -p /mnt/models && sudo chown "$USER" /mnt/models
+          df -h / /mnt
 
       - run: pip install -q -U "huggingface_hub[hf_xet]"
 
