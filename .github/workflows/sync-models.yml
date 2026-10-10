@@ -39,14 +39,15 @@ jobs:
               ("FastVideo/FastVideo-FastH3-Comfy",
                "diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
                "diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors"),
-              # 10Eros-Max beta6 (TenStrip, 2026-10-09): 8-step TURBO, int8, pruned layout.
+              # 10Eros-Max beta5 TURBO-hybrid (TenStrip), the one the studio uses. beta6 was
+              # evaluated on 2026-10-10 and not adopted (Ref2V-leaning, slower to sample).
               ("TenStrip/10Eros-Max",
-               "10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors",
-               "diffusion_models/10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors"),
+               "10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors",
+               "diffusion_models/10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors"),
           ]
           # Superseded files. Pinned older commits keep them, so rolling back still works.
           DELETE = ["boot.sh", "h3_handler.py", "runtime/",
-                    "diffusion_models/10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors"]
+                    "diffusion_models/10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors"]
 
           api = HfApi()
           target = os.environ["TARGET"]
