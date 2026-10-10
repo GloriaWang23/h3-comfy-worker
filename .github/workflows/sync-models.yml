@@ -39,10 +39,14 @@ jobs:
               ("FastVideo/FastVideo-FastH3-Comfy",
                "diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
                "diffusion_models/fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors"),
+              # 10Eros-Max beta6 (TenStrip, 2026-10-09): 8-step TURBO, int8, pruned layout.
+              ("TenStrip/10Eros-Max",
+               "10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors",
+               "diffusion_models/10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors"),
           ]
-          # The old start path (boot.sh + runtime overlay + handler copy) is baked into the
-          # worker image now; pinned older commits keep these files for rollback.
-          DELETE = ["boot.sh", "h3_handler.py", "runtime/"]
+          # Superseded files. Pinned older commits keep them, so rolling back still works.
+          DELETE = ["boot.sh", "h3_handler.py", "runtime/",
+                    "diffusion_models/10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors"]
 
           api = HfApi()
           target = os.environ["TARGET"]
@@ -62,7 +66,8 @@ jobs:
               print("nothing to do")
           else:
               info = api.create_commit(target, operations=ops,
-                                       commit_message="Add FastH3 8-step v2; drop the old boot runtime")
+                                       commit_message="Sync models: " + ", ".join(
+                                           ("+" if isinstance(o, CommitOperationAdd) else "-") + o.path_in_repo.split("/")[-1] for o in ops))
               print(f"NEW COMMIT {info.oid}")
           print("files now:")
           for f in api.list_repo_tree(target, recursive=True):
