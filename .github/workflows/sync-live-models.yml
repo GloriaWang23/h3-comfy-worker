@@ -1,0 +1,67 @@
+name: sync live models
+
+# Builds GloriaWang23/h3-live-runtime: the Hugging Face repo the h3-live serverless endpoint
+# caches (one cached model per endpoint, and the whole repo is downloaded, so it holds only
+# the 11 files the livestream loads). Files are copied from their public source repos one at
+# a time (download, upload, delete) so the runner's disk only ever holds one file.
+# Independent of the studio endpoint and of h3-comfy-runtime. Needs the secret HF_TOKEN.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TARGET: GloriaWang23/h3-live-runtime
+    steps:
+      - name: Disk
+        run: |
+          sudo mkdir -p /mnt/models && sudo chown "$USER" /mnt/models
+          df -h / /mnt
+
+      - run: pip install -q -U "huggingface_hub[hf_xet]"
+
+      - name: Copy files
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_XET_HIGH_PERFORMANCE: "1"
+        shell: python
+        run: |
+          import os, shutil, time
+          from huggingface_hub import HfApi, hf_hub_download
+
+          FILES = [
+              # (source repo, file in source, path in target) — same layout as the pod's models/comfy
+              ("Comfy-Org/MiniMax-H3", "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"),
+              ("Comfy-Org/MiniMax-H3", "vae/minimax_h3_video_vae_int8_convrot.safetensors", "vae/minimax_h3_video_vae_int8_convrot.safetensors"),
+              ("Kijai/MiniMax-H3-experimental", "minimax_h3_lynnreal_light_vae_int8_convrot.safetensors", "vae/minimax_h3_lynnreal_light_vae_int8_convrot.safetensors"),
+              ("Comfy-Org/MiniMax-H3", "vae/minimax_h3_audio_vae_fp32.safetensors", "vae/minimax_h3_audio_vae_fp32.safetensors"),
+              ("LBH-123-AI/Minimax_h3_latent_Upscaler", "minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors", "latent_upscale_models/minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors"),
+              ("GloriaWang23/h3-comfy-runtime", "loras/HMNSFW-AIO-V2.5.safetensors", "loras/HMNSFW-AIO-V2.5.safetensors"),
+              ("CZMartin22/TaoMate-H3-3step-ComfyUI", "TaoMate-H3-3step-ComfyUI.safetensors", "loras/TaoMate-H3-3step-ComfyUI.safetensors"),
+              ("lightx2v/Minimax-h3-Turbo", "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"),
+              ("Comfy-Org/MiniMax-H3", "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"),
+              ("Comfy-Org/MiniMax-H3", "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors", "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"),
+          ]
+          api = HfApi()
+          target = os.environ["TARGET"]
+          api.create_repo(target, repo_type="model", private=False, exist_ok=True)
+          present = {f.path: f.size for f in api.list_repo_tree(target, recursive=True) if getattr(f, "size", None)}
+          for repo, src, dest in FILES:
+              if dest in present:
+                  print(f"already present: {dest}", flush=True); continue
+              t = time.time()
+              path = hf_hub_download(repo, src, local_dir="/mnt/models")
+              size = os.path.getsize(path); t1 = time.time()
+              api.upload_file(path_or_fileobj=path, path_in_repo=dest, repo_id=target,
+                              commit_message=f"Add {dest.split('/')[-1]} from {repo}")
+              t2 = time.time()
+              print(f"{dest}: {size/1e9:.2f} GB  download {t1-t:.0f}s ({size/1e6/max(t1-t,1):.0f} MB/s)  upload {t2-t1:.0f}s", flush=True)
+              shutil.rmtree("/mnt/models", ignore_errors=True); os.makedirs("/mnt/models", exist_ok=True)
+          info = api.repo_info(target)
+          total = sum(f.size for f in api.list_repo_tree(target, recursive=True) if getattr(f, "size", None))
+          print(f"COMMIT {info.sha}  total {total/1e9:.1f} GB")
