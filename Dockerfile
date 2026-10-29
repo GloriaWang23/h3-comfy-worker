@@ -7,9 +7,9 @@
 #  - h3_handler.py: media URLs in, Tencent COS URLs out, cancel -> ComfyUI interrupt.
 # Model weights are NOT baked in: they come from Runpod's cached-model feature (the
 # Hugging Face repo GloriaWang23/h3-comfy-runtime), linked to /h3-models at start.
-FROM runpod/worker-comfyui:5.10.0-base
+FROM runpod/worker-comfyui:5.11.0-base
 
-ARG COMFYUI_VERSION=v0.39.2
+ARG COMFYUI_VERSION=v0.43.1
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 
 # 1. torch cu130 in the launch venv (/opt/venv), replacing the base image's cu128 build.

@@ -2,10 +2,10 @@
 
 RunPod Serverless worker image for H3 Studio (MiniMax H3 video generation through ComfyUI).
 
-Built `FROM runpod/worker-comfyui:5.10.0-base`, following that project's customization guide, with:
+Built `FROM runpod/worker-comfyui:5.11.0-base`, following that project's customization guide, with:
 
 - **torch 2.11.0+cu130** (comfy-kitchen's CUDA int8 kernels need CUDA 13; the endpoint only uses hosts with CUDA >= 13.0)
-- **ComfyUI v0.39.2** (the base image ships 0.34.0, which has no MiniMax H3 nodes)
+- **ComfyUI v0.43.1** (the base image ships 0.34.0, which has no MiniMax H3 nodes)
 - **`h3_handler.py`**, wrapped around the stock handler:
   - downloads `input.media` URLs into ComfyUI's input folder (retries; a 4xx or oversize file fails at once)
   - checks that every model file the loaders name exists before queueing
