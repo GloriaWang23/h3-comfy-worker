@@ -14,8 +14,10 @@ ARG FLASHVSR_NODE_COMMIT=5e3a20737f4abad337141779b586c2df0e8c42f8
 
 # 1. Triton JIT-compiles a small C launcher at first use: it needs a C compiler and the
 #    interpreter's Python.h.
-RUN (command -v gcc >/dev/null || (apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
-      && rm -rf /var/lib/apt/lists/*)) \
+#    The venv runs on the system Python 3.12, so its headers come from python3.12-dev.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev "python$(python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')-dev" \
+    && rm -rf /var/lib/apt/lists/* \
     && python -c "import os, sysconfig; p = os.path.join(sysconfig.get_paths()['include'], 'Python.h'); assert os.path.exists(p), p" \
     && python -c "import triton; print('triton', triton.__version__)"
 
