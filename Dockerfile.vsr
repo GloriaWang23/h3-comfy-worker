@@ -21,6 +21,19 @@ RUN apt-get update \
     && python -c "import os, sysconfig; p = os.path.join(sysconfig.get_paths()['include'], 'Python.h'); assert os.path.exists(p), p" \
     && python -c "import triton; print('triton', triton.__version__)"
 
+# 1b. torch compiles some CUDA kernels at run time (jiterator, e.g. the prod reduction SeedVR2's
+#     sampler hits) with NVRTC, which dlopens libnvrtc-builtins.so.<cuda> by name. The cu130 wheels
+#     ship it inside site-packages, outside the loader path: register that directory, installing
+#     the NVRTC wheel first if the library is missing.
+RUN find_builtins() { python -c "import glob, site; print(next(iter(sorted(glob.glob(site.getsitepackages()[0] + '/nvidia/**/libnvrtc-builtins.so*', recursive=True))), ''))"; } \
+    && lib=$(find_builtins) \
+    && if [ -z "$lib" ]; then uv pip install "nvidia-cuda-nvrtc==13.0.*" && rm -rf /root/.cache && lib=$(find_builtins); fi \
+    && test -n "$lib" \
+    && dirname "$lib" > /etc/ld.so.conf.d/nvrtc-builtins.conf \
+    && ldconfig \
+    && ldconfig -p | grep nvrtc-builtins \
+    && python -c "import ctypes; ctypes.CDLL('libnvrtc-builtins.so.13.0')"
+
 # 2. The FlashVSR node at a pinned commit, its runtime imports, and the Triton kernel
 #    (--no-deps: torch / triton stay the image's cu130 builds).
 RUN git clone https://github.com/smthemex/ComfyUI_FlashVSR.git /comfyui/custom_nodes/ComfyUI_FlashVSR \

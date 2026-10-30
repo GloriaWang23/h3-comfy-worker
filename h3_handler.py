@@ -15,6 +15,8 @@ Adds these things without touching the stock handler:
   - a dead ComfyUI process asks Runpod for a fresh worker instead of failing every later job.
   - per-job inputs and outputs are deleted afterwards, and stage timings are returned with
     the result (worker logs are gone once the container stops).
+  - a workflow execution error fails the job (the stock handler reports it next to any outputs
+    as COMPLETED), and inputs that loaders preview (LoadVideo) are not uploaded as outputs.
 """
 
 import glob
@@ -226,6 +228,38 @@ def watch_cancel(job_id, done):
             return
 
 
+def failed_run(result):
+    """The stock handler reports a node error as {"errors": [...]} next to whatever outputs exist,
+    which Runpod marks COMPLETED. Turn a workflow execution error into a failed job."""
+    if not isinstance(result, dict) or result.get("error"):
+        return result
+    failed = [e for e in result.get("errors") or [] if str(e).startswith("Workflow execution error")]
+    if not failed:
+        return result
+    msg = str(failed[0])
+    # CUDA / compiler errors carry pages of kernel source; keep the head and the actual cause
+    short = msg if len(msg) <= 1500 else f"{msg[:300]} ... {msg[-1000:]}"
+    return {"error": short, "details": [short] + [str(e)[:500] for e in result["errors"] if e is not failed[0]]}
+
+
+_stock_get_history = getattr(base, "get_history", None)
+
+
+def get_history(prompt_id):
+    """History without LoadVideo's preview of the input (type "input"): the stock handler uploads
+    every image entry, and the input would land on COS under the job's own output key."""
+    history = _stock_get_history(prompt_id)
+    for prompt in history.values():
+        for out in (prompt.get("outputs") or {}).values():
+            if "images" in out:
+                out["images"] = [i for i in out["images"] if i.get("type") != "input"]
+    return history
+
+
+if _stock_get_history:
+    base.get_history = get_history
+
+
 def h3_handler(job):
     global JOBS_DONE
     t_start = time.time()
@@ -253,6 +287,7 @@ def h3_handler(job):
         finally:
             done.set()
         timings["comfy_s"] = round(time.time() - t0 - TIMINGS.get("upload_s", 0), 1)
+        result = failed_run(result)
         timings.update(TIMINGS)
         timings["total_s"] = round(time.time() - t_start, 1)
         if isinstance(result, dict):

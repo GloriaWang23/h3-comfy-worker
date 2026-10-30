@@ -42,6 +42,8 @@ base_result = {"v": {"images": []}}
 base = types.ModuleType("handler")
 base.rp_upload = types.SimpleNamespace(upload_image=None)
 base.handler = lambda job: base_result["v"]
+history = {"v": {}}
+base.get_history = lambda prompt_id: history["v"]
 base.runpod = types.SimpleNamespace(serverless=types.SimpleNamespace(start=lambda cfg: None))
 sys.modules["handler"] = base
 
@@ -100,6 +102,25 @@ class Tests(unittest.TestCase):
     def test_missing_model_fails_fast(self):
         r = h.h3_handler(self.job(unet="nope.safetensors"))
         self.assertIn("diffusion_models/nope.safetensors", r["error"])
+
+    def test_execution_error_fails_the_job(self):
+        base_result["v"] = {"images": [{"type": "s3_url", "data": "u"}], "errors": ["Workflow execution error: Node Type: KSampler, " + "x" * 5000 + " nvrtc: error"]}
+        r = h.h3_handler(self.job())
+        self.assertNotIn("images", r)
+        self.assertTrue(r["error"].startswith("Workflow execution error: Node Type: KSampler"))
+        self.assertTrue(r["error"].endswith("nvrtc: error"))
+        self.assertLess(len(r["error"]), 1500)
+
+    def test_warnings_alone_keep_the_result(self):
+        base_result["v"] = {"images": [{"type": "s3_url", "data": "u"}], "errors": ["Node 9 produced unhandled output keys"]}
+        self.assertEqual(h.h3_handler(self.job())["images"][0]["data"], "u")
+
+    def test_input_previews_not_uploaded(self):
+        history["v"] = {"p": {"outputs": {"1": {"images": [{"filename": "source.mp4", "type": "input"}]},
+                                          "2": {"images": [{"filename": "out.mp4", "type": "output"}]}}}}
+        out = h.base.get_history("p")["p"]["outputs"]
+        self.assertEqual(out["1"]["images"], [])
+        self.assertEqual(out["2"]["images"][0]["filename"], "out.mp4")
 
     def test_flashvsr_loaders_checked_and_none_skipped(self):
         wf = {"1": {"class_type": "FlashVSR_SM_Model", "inputs": {"dit": "turbo_dit_plus.safetensors"}},
