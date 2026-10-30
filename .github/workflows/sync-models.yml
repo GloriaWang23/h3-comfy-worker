@@ -60,6 +60,11 @@ jobs:
                   ("hf", "lightx2v/Minimax-h3-Turbo", "minimax_h3_fl2v_turbo_8step_v1.1_768p_comfyui_bf16.safetensors"),
               "loras/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors":
                   ("hf", "lightx2v/Minimax-h3-Turbo", "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"),
+              # Pika H3 Flex 6-step LoRAs, Comfy-Org repack (the files the official templates load)
+              "loras/pika_h3_flex_fl2va_v1_bf16.safetensors":
+                  ("hf", "Comfy-Org/MiniMax-H3", "loras/pika_h3_flex_fl2va_v1_bf16.safetensors"),
+              "loras/pika_h3_flex_ref2va_v1_bf16.safetensors":
+                  ("hf", "Comfy-Org/MiniMax-H3", "loras/pika_h3_flex_ref2va_v1_bf16.safetensors"),
               # NSFW LoRAs from Civitai (model version id, file name): MysticXXX V5, NSFW Unlocked V2.1
               "loras/MysticXXX_MMH3-V5.safetensors": ("civitai", 3416478, "MysticXXX_MMH3-V5.safetensors"),
               "loras/MysticXXX_MMH3-V5-ref2va.safetensors": ("civitai", 3416478, "MysticXXX_MMH3-V5-ref2va.safetensors"),
