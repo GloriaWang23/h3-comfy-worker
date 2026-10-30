@@ -1,0 +1,94 @@
+name: sync vsr models
+
+# Makes the Hugging Face repo the upscale endpoint caches (GloriaWang23/h3-vsr-runtime, created
+# public if missing) hold exactly the files in WANT and deletes the rest. Independent of
+# h3-comfy-runtime. The endpoint pins a commit, so nothing changes for it until its model
+# reference and H3_MODEL_SHA are moved to the commit this prints. Needs the secret HF_TOKEN.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TARGET: GloriaWang23/h3-vsr-runtime
+    steps:
+      - name: Disk
+        run: |
+          sudo mkdir -p /mnt/models && sudo chown "$USER" /mnt/models
+          df -h / /mnt
+
+      - run: pip install -q -U "huggingface_hub[hf_xet]"
+
+      - name: Download, then commit add + deletes
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        shell: python
+        run: |
+          import os, shutil, urllib.request
+          from huggingface_hub import CommitOperationDelete, HfApi, hf_hub_download
+
+          # path in target -> ("hf", source repo, file) | ("url", url)
+          # FlashVSR file names follow smthemex/ComfyUI_FlashVSR's pickers: the DiT must contain
+          # "dit", the LQ projection "proj", the decoder "tcd", the prompt tensor "prompt".
+          FVSR_PLUS = "https://raw.githubusercontent.com/OpenImagingLab/FlashVSR_Plus/b548a2cc2c929d3d4676f2973abe27876ec4dee7"
+          WANT = {
+              # SeedVR2, Comfy-Org repack (the official templates' int8_convrot files) + VAE
+              "diffusion_models/seedvr2_3b_int8_convrot.safetensors":
+                  ("hf", "Comfy-Org/SeedVR2", "diffusion_models/seedvr2_3b_int8_convrot.safetensors"),
+              "diffusion_models/seedvr2_7b_int8_convrot.safetensors":
+                  ("hf", "Comfy-Org/SeedVR2", "diffusion_models/seedvr2_7b_int8_convrot.safetensors"),
+              "diffusion_models/seedvr2_7b_sharp_int8_convrot.safetensors":
+                  ("hf", "Comfy-Org/SeedVR2", "diffusion_models/seedvr2_7b_sharp_int8_convrot.safetensors"),
+              "vae/seedvr2_ema_vae_fp16.safetensors":
+                  ("hf", "Comfy-Org/SeedVR2", "vae/seedvr2_ema_vae_fp16.safetensors"),
+              # FlashVSR+ (official, ruchangyao/FlashVSR_plus) + its fixed prompt tensor
+              "FlashVSR/turbo_dit_plus.safetensors": ("hf", "ruchangyao/FlashVSR_plus", "turbo/dit.safetensors"),
+              "FlashVSR/turbo_lq_proj_in_plus.safetensors": ("hf", "ruchangyao/FlashVSR_plus", "turbo/lq_proj_in.safetensors"),
+              "FlashVSR/base_dit_plus.safetensors": ("hf", "ruchangyao/FlashVSR_plus", "base/dit.safetensors"),
+              "FlashVSR/base_lq_proj_in_plus.safetensors": ("hf", "ruchangyao/FlashVSR_plus", "base/lq_proj_in.safetensors"),
+              "FlashVSR/TCDecoder_plus.ckpt": ("hf", "ruchangyao/FlashVSR_plus", "TCDecoder.ckpt"),
+              "FlashVSR/posi_prompt_plus.pth": ("url", f"{FVSR_PLUS}/prompt_tensor/posi_prompt.pth"),
+          }
+          KEEP = {"README.md", ".gitattributes"}
+
+          api = HfApi()
+          target = os.environ["TARGET"]
+          api.create_repo(target, repo_type="model", private=False, exist_ok=True)
+          present = set(api.list_repo_files(target))
+          # One commit per added file, removed locally right after. The last commit printed is
+          # the one to pin.
+          last = None
+          for dest, src in WANT.items():
+              if dest in present:
+                  continue
+              local = os.path.join("/mnt/models", os.path.basename(dest))
+              if src[0] == "hf":
+                  path = hf_hub_download(src[1], src[2], local_dir="/mnt/models/_hf")
+                  shutil.move(path, local)
+              else:
+                  req = urllib.request.Request(src[1], headers={"User-Agent": "h3-sync-models/1.0"})
+                  with urllib.request.urlopen(req) as r, open(local, "wb") as out:
+                      shutil.copyfileobj(r, out, 16 << 20)
+              print(f"downloaded {dest}: {os.path.getsize(local) / 1e9:.2f} GB", flush=True)
+              last = api.upload_file(path_or_fileobj=local, path_in_repo=dest, repo_id=target,
+                                     commit_message=f"Sync models: +{os.path.basename(dest)}").oid
+              print(f"committed {dest} -> {last}", flush=True)
+              os.remove(local)
+              shutil.rmtree("/mnt/models/_hf", ignore_errors=True)
+          deletes = sorted(present - set(WANT) - KEEP)
+          if deletes:
+              last = api.create_commit(target, operations=[CommitOperationDelete(path_in_repo=p) for p in deletes],
+                                       commit_message="Sync models: " + ", ".join("-" + p.split("/")[-1] for p in deletes)).oid
+          print(f"NEW COMMIT {last}" if last else "nothing to do")
+          print("files now:")
+          total = 0
+          for f in api.list_repo_tree(target, recursive=True):
+              if getattr(f, "size", None):
+                  total += f.size
+                  print(f"  {f.path}  {f.size / 1e9:.2f} GB")
+          print(f"total {total / 1e9:.1f} GB")

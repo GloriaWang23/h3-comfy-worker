@@ -8,7 +8,7 @@ on:
     branches: [main]
     tags: ["v*"]
     # Changes that do not affect the image.
-    paths-ignore: [".github/workflows/sync-models.yml", ".github/workflows/sync-live-models.yml", "tests/**", "ops/**", "README.md"]
+    paths-ignore: [".github/workflows/sync-models.yml", ".github/workflows/sync-live-models.yml", ".github/workflows/sync-vsr-models.yml", ".github/workflows/build-vsr.yml", "Dockerfile.vsr", "tests/**", "ops/**", "README.md"]
   workflow_dispatch:
 
 permissions:

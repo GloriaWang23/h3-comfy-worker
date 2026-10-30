@@ -40,12 +40,17 @@ MODELS_DIR = "/h3-models"
 MAX_MEDIA_BYTES = 500 * 1024 * 1024
 COMFY_URL = "http://127.0.0.1:8188"
 CANCEL_POLL_SECONDS = 5
-# Loader input -> model folder under MODELS_DIR (see extra_model_paths.yaml).
+# Loader input -> model folder under MODELS_DIR (see extra_model_paths.yaml). The last four
+# are the FlashVSR loaders of the upscale image (smthemex/ComfyUI_FlashVSR).
 MODEL_INPUTS = {
     "unet_name": "diffusion_models",
     "clip_name": "text_encoders",
     "vae_name": "vae",
     "lora_name": "loras",
+    "dit": "FlashVSR",
+    "lq_proj": "FlashVSR",
+    "prompt_embed": "FlashVSR",
+    "tcd_encoder": "FlashVSR",
 }
 
 JOBS_DONE = 0
@@ -164,7 +169,7 @@ def missing_models(workflow):
     for node in workflow.values():
         for key, folder in MODEL_INPUTS.items():
             name = node.get("inputs", {}).get(key)
-            if isinstance(name, str) and not os.path.isfile(os.path.join(MODELS_DIR, folder, name)):
+            if isinstance(name, str) and name != "none" and not os.path.isfile(os.path.join(MODELS_DIR, folder, name)):
                 missing.append(f"{folder}/{name}")
     return missing
 

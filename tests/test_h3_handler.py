@@ -101,6 +101,11 @@ class Tests(unittest.TestCase):
         r = h.h3_handler(self.job(unet="nope.safetensors"))
         self.assertIn("diffusion_models/nope.safetensors", r["error"])
 
+    def test_flashvsr_loaders_checked_and_none_skipped(self):
+        wf = {"1": {"class_type": "FlashVSR_SM_Model", "inputs": {"dit": "turbo_dit_plus.safetensors"}},
+              "2": {"class_type": "FlashVSR_SM_Vae", "inputs": {"vae": "none", "tcd_encoder": "none"}}}
+        self.assertEqual(h.missing_models(wf), ["FlashVSR/turbo_dit_plus.safetensors"])
+
     def test_download_retries_5xx_then_succeeds_and_cleans_up(self):
         r = h.h3_handler(self.job([{"name": "first.png", "url": self.url + "/flaky.png"}]))
         self.assertNotIn("error", r)

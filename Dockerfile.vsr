@@ -1,0 +1,46 @@
+# H3 Studio video upscale worker (endpoint h3-vsr): the studio's H3 worker image (worker-comfyui
+# 5.10.0-base + torch 2.11.0+cu130 + ComfyUI v0.43.1 + h3_handler) with the two upscalers:
+#  - SeedVR2: ComfyUI's native nodes (PR #14424 / #16530), nothing to add.
+#  - FlashVSR+: smthemex/ComfyUI_FlashVSR (FlashVSR+ through ComfyUI's Wan loader and the
+#    official flashvsr_plus presets), with the official Triton block-sparse attention kernel
+#    (operators/flashvsr_attn; Block-Sparse-Attention is not compiled, so the node's automatic
+#    kernel choice lands on Triton).
+# Weights come from Runpod's cached-model feature (Hugging Face repo GloriaWang23/h3-vsr-runtime,
+# set H3_MODEL_REPO / H3_MODEL_SHA on the template), linked to /h3-models at start.
+ARG BASE_IMAGE=ghcr.io/gloriawang23/h3-comfy-worker:sha-0454363
+FROM ${BASE_IMAGE}
+
+ARG FLASHVSR_NODE_COMMIT=5e3a20737f4abad337141779b586c2df0e8c42f8
+
+# 1. Triton JIT-compiles a small C launcher at first use: it needs a C compiler and the
+#    interpreter's Python.h.
+RUN (command -v gcc >/dev/null || (apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+      && rm -rf /var/lib/apt/lists/*)) \
+    && python -c "import os, sysconfig; p = os.path.join(sysconfig.get_paths()['include'], 'Python.h'); assert os.path.exists(p), p" \
+    && python -c "import triton; print('triton', triton.__version__)"
+
+# 2. The FlashVSR node at a pinned commit, its runtime imports, and the Triton kernel
+#    (--no-deps: torch / triton stay the image's cu130 builds).
+RUN git clone https://github.com/smthemex/ComfyUI_FlashVSR.git /comfyui/custom_nodes/ComfyUI_FlashVSR \
+    && cd /comfyui/custom_nodes/ComfyUI_FlashVSR \
+    && git checkout ${FLASHVSR_NODE_COMMIT} \
+    && rm -rf .git example_workflows \
+    && uv pip install einops imageio imageio-ffmpeg loguru opencv-python-headless \
+    && uv pip install --no-deps --no-build-isolation ./operators/flashvsr_attn \
+    && python -c "import flashvsr_attn, cv2, imageio_ffmpeg, loguru, einops" \
+    && rm -rf /root/.cache
+
+# 3. FlashVSR model folder inside the cached snapshot (extra_model_paths.yaml already maps
+#    /h3-models for diffusion_models / vae).
+RUN printf '  FlashVSR: FlashVSR/\n' >> /comfyui/extra_model_paths.yaml \
+    && tail -n 7 /comfyui/extra_model_paths.yaml
+
+# 4. Current handler (FlashVSR loaders in the model pre-check).
+COPY h3_handler.py /h3_handler.py
+
+# Build-time smoke test: the custom node must import and register on CPU.
+RUN cd /comfyui && timeout 300 python main.py --quick-test-for-ci --cpu 2>&1 | tee /tmp/quick.log \
+    && ! grep -q "IMPORT FAILED" /tmp/quick.log \
+    && echo "flashvsr-node ${FLASHVSR_NODE_COMMIT}" >> /comfyui/.h3_version
+
+CMD ["/h3_start.sh"]
