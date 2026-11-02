@@ -37,7 +37,7 @@ jobs:
 
           # The complete file set of the repo. Anything else is deleted (README/.gitattributes kept);
           # pinned older commits keep their files.
-          #   path in target -> ("hf", source repo, file) | ("civitai", version id, file name) | None (already there)
+          #   path in target -> ("hf", source repo, file[, revision]) | ("civitai", version id, file name) | None (already there)
           WANT = {
               # Comfy-Org official bases, text encoder, VAEs
               "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors": None,
@@ -65,6 +65,27 @@ jobs:
                   ("hf", "Comfy-Org/MiniMax-H3", "loras/pika_h3_flex_fl2va_v1_bf16.safetensors"),
               "loras/pika_h3_flex_ref2va_v1_bf16.safetensors":
                   ("hf", "Comfy-Org/MiniMax-H3", "loras/pika_h3_flex_ref2va_v1_bf16.safetensors"),
+              # Pika H3 Flex Turbo LoRAs (akhaliq, community): Flex 0.5/0.6 fused with lightx2v / pDMD
+              # turbo into single LoRAs; each file fixes its step count. Pinned source commit.
+              "loras/pika_h3_flex_turbo_2step_draft_ref2va.safetensors":
+                  ("hf", "akhaliq/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_2step_draft_ref2va.safetensors", "dcacd93a50f714ba1cd61c7ca2cc5f65e9a1ec60"),
+              "loras/pika_h3_flex_turbo_4step_fl2va.safetensors":
+                  ("hf", "akhaliq/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_4step_fl2va.safetensors", "dcacd93a50f714ba1cd61c7ca2cc5f65e9a1ec60"),
+              "loras/pika_h3_flex_turbo_4step_ref2va.safetensors":
+                  ("hf", "akhaliq/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_4step_ref2va.safetensors", "dcacd93a50f714ba1cd61c7ca2cc5f65e9a1ec60"),
+              "loras/pika_h3_flex_turbo_4step_fl2va_lite_r32.safetensors":
+                  ("hf", "akhaliq/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_4step_fl2va_lite_r32.safetensors", "dcacd93a50f714ba1cd61c7ca2cc5f65e9a1ec60"),
+              "loras/pika_h3_flex_turbo_4step_ref2va_lite_r32.safetensors":
+                  ("hf", "akhaliq/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_4step_ref2va_lite_r32.safetensors", "dcacd93a50f714ba1cd61c7ca2cc5f65e9a1ec60"),
+              "loras/pika_h3_flex_turbo_8step_hd_fl2va.safetensors":
+                  ("hf", "akhaliq/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_8step_hd_fl2va.safetensors", "dcacd93a50f714ba1cd61c7ca2cc5f65e9a1ec60"),
+              "loras/pika_h3_flex_turbo_8step_hd_ref2va.safetensors":
+                  ("hf", "akhaliq/Pika-H3-Flex-Turbo-LoRA", "pika_h3_flex_turbo_8step_hd_ref2va.safetensors", "dcacd93a50f714ba1cd61c7ca2cc5f65e9a1ec60"),
+              # Singularity V2 (WarmBloodAban), ref2va-only fine-tune, pruned int8 (same comfy_quant
+              # int8_tensorwise + convrot format as Comfy-Org's pruned bases). Pinned source commit.
+              "diffusion_models/Minimax-h3_Singularity_ref2va_v2_pruned_int8.safetensors":
+                  ("hf", "WarmBloodAban/Minimax-h3_Singularity", "Minimax-h3_Singularity_ref2va_v2_pruned_int8.safetensors",
+                   "1259cf16cd0b655ba691a32fb46a409142762972"),
               # NSFW LoRAs from Civitai (model version id, file name): MysticXXX V5, NSFW Unlocked V2.1
               "loras/MysticXXX_MMH3-V5.safetensors": ("civitai", 3416478, "MysticXXX_MMH3-V5.safetensors"),
               "loras/MysticXXX_MMH3-V5-ref2va.safetensors": ("civitai", 3416478, "MysticXXX_MMH3-V5-ref2va.safetensors"),
@@ -109,7 +130,7 @@ jobs:
                   continue
               local = os.path.join("/mnt/models", os.path.basename(dest))
               if src[0] == "hf":
-                  path = hf_hub_download(src[1], src[2], local_dir="/mnt/models/_hf")
+                  path = hf_hub_download(src[1], src[2], revision=src[3] if len(src) > 3 else None, local_dir="/mnt/models/_hf")
                   shutil.move(path, local)
               else:
                   civitai(src[1], src[2], local)
