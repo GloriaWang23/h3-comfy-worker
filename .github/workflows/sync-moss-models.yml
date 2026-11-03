@@ -1,0 +1,158 @@
+name: sync moss models
+
+# Makes the Hugging Face repo the moss-image endpoint caches (GloriaWang23/moss-image-runtime,
+# created public if missing) hold exactly the files in WANT and deletes the rest. Independent of
+# the H3 and VSR repos. The endpoint pins a commit, so nothing changes for it until its model
+# reference and H3_MODEL_SHA are moved to the commit this prints.
+# Needs the repository secrets HF_TOKEN (write access) and CIVITAI_TOKEN.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TARGET: GloriaWang23/moss-image-runtime
+    steps:
+      - name: Disk
+        run: |
+          sudo mkdir -p /mnt/models && sudo chown "$USER" /mnt/models
+          df -h / /mnt
+
+      - run: pip install -q -U "huggingface_hub[hf_xet]"
+
+      - name: Download, then commit add + deletes
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CIVITAI_TOKEN: ${{ secrets.CIVITAI_TOKEN }}
+        shell: python
+        run: |
+          import json, os, shutil, struct, urllib.error, urllib.request
+          from huggingface_hub import CommitOperationDelete, HfApi, hf_hub_download
+
+          # path in target -> ("hf", source repo, file, revision) | ("civitai", version id, file name)
+          # Sources and versions resolved 2026-11-03 (design: h3-studio/docs/superpowers/specs/2026-11-03-image-moss-design.md).
+          COMFY = ("Comfy-Org/MOSS-Image", "530a4c94f92c35ef6818b1b035a983fe9dcf5f54")
+          KROMOSS = ("lodestones/Kromoss", "a4fe97449297af2e3be7841e1c18e431f3b06031")
+          WANT = {
+              # official (Comfy-Org repack, the files the official templates load)
+              "diffusion_models/moss_image_sft_int8_convrot.safetensors":
+                  ("hf", COMFY[0], "diffusion_models/moss_image_sft_int8_convrot.safetensors", COMFY[1]),
+              "diffusion_models/moss_image_base_int8_convrot.safetensors":
+                  ("hf", COMFY[0], "diffusion_models/moss_image_base_int8_convrot.safetensors", COMFY[1]),
+              "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors":
+                  ("hf", COMFY[0], "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors", COMFY[1]),
+              "vae/flux2-vae_small.safetensors":
+                  ("hf", COMFY[0], "vae/flux2-vae_small.safetensors", COMFY[1]),
+              "loras/moss_image_edit_lora_rank_64_bf16.safetensors":
+                  ("hf", COMFY[0], "loras/moss_image_edit_lora_rank_64_bf16.safetensors", COMFY[1]),
+              # community bases
+              "diffusion_models/kromoss_int8_convrot.safetensors":
+                  ("hf", KROMOSS[0], "diffusion_models/kromoss_int8_convrot.safetensors", KROMOSS[1]),
+              "diffusion_models/moss_image_sft_turbo_int8_convrot.safetensors":
+                  ("hf", "toxicdog/MOSS-Image-SFT-Turbo-INT8-ConvRot", "diffusion_models/moss_image_sft_turbo_int8_convrot.safetensors",
+                   "a04afd66c4f9a3b41658a611906723b55ee40301"),
+              "diffusion_models/jibmix_moss_realistic_v2_int8.safetensors":
+                  ("civitai", 3435334, "jibMixMossRealistic_v2RealityRenew.safetensors"),
+              "diffusion_models/miaomiao_harem_moss_v11_int8.safetensors":
+                  ("civitai", 3434952, "miaomiaoHaremMOSS_baseV11_3332286.safetensors"),
+              # NSFW LoRAs
+              "loras/moss_better_nude_v2.safetensors": ("civitai", 3423785, "moss_pussy_lora_v2.0.safetensors"),
+              "loras/moss_better_nude_v2_8steps.safetensors": ("civitai", 3434416, "moss_pussy_lora_v2.0_8steps.safetensors"),
+              "loras/moss_mystic_xxx_v1.safetensors": ("civitai", 3422843, "MysticXXX-Moss-V1.safetensors"),
+              "loras/moss_axiomofmind_nsfw.safetensors":
+                  ("hf", "axiomofmind/Moss-image-nsfw-uncensored-lora", "MOSS-Image-NSFW-Uncensored-LoRA-ComfyUI.safetensors",
+                   "5f24e258ebb2a7d8aa77ee4940504dd57b54d5b9"),
+              # 8-step accelerators
+              "loras/moss_sft_8step_dmd.safetensors":
+                  ("hf", "lodestones/MOSS-Image-SFT-8-steps-dmd", "lora.safetensors", "f95df83b5e90ae91ea412434b3f9b7f1c8c6314f"),
+              "loras/kromoss_8step_dmd2.safetensors": ("hf", KROMOSS[0], "8-steps-dmd2-lora.safetensors", KROMOSS[1]),
+          }
+          KEEP = {"README.md", ".gitattributes"}
+
+          def civitai(version_id, name, dest):
+              # The version's file list gives each file's download URL. Civitai redirects it to
+              # signed storage that rejects the Authorization header, so take the redirect
+              # target and fetch it without the header.
+              ua = {"User-Agent": "moss-sync-models/1.0"}  # Cloudflare rejects urllib's default agent
+              auth = {**ua, "Authorization": f"Bearer {os.environ['CIVITAI_TOKEN']}"}
+              meta = json.load(urllib.request.urlopen(urllib.request.Request(
+                  f"https://civitai.com/api/v1/model-versions/{version_id}", headers=auth)))
+              url = next(f["downloadUrl"] for f in meta["files"] if f["name"] == name)
+              class Stop(urllib.request.HTTPRedirectHandler):
+                  def redirect_request(self, req, fp, code, msg, headers, newurl):
+                      raise urllib.error.HTTPError(newurl, code, msg, headers, fp)
+              try:
+                  urllib.request.build_opener(Stop).open(urllib.request.Request(url, headers=auth))
+                  raise SystemExit(f"civitai: no redirect for {name}")
+              except urllib.error.HTTPError as e:
+                  if e.code not in (301, 302, 303, 307, 308):
+                      raise
+                  signed = e.url
+              with urllib.request.urlopen(urllib.request.Request(signed, headers=ua)) as r, open(dest, "wb") as out:
+                  shutil.copyfileobj(r, out, 16 << 20)
+
+          def fix_lora_keys(path):
+              # ComfyUI v0.43.1 maps MOSS LoRA keys with a diffusion_model. / lora_unet_ prefix or bare
+              # module names, but not transformer. (PEFT/diffusers). Rename those keys in the
+              # safetensors header only; tensor data and offsets are untouched.
+              with open(path, "rb") as f:
+                  n = struct.unpack("<Q", f.read(8))[0]
+                  header = json.loads(f.read(n))
+                  renamed = {(("diffusion_model." + k[len("transformer."):]) if k.startswith("transformer.") else k): v
+                             for k, v in header.items()}
+                  count = sum(k.startswith("transformer.") for k in header)
+                  if not count:
+                      print(f"lora keys ok: {os.path.basename(path)} ({len(header)} entries)", flush=True)
+                      return
+                  raw = json.dumps(renamed, separators=(",", ":")).encode()
+                  raw += b" " * (-len(raw) % 8)
+                  tmp = path + ".fixed"
+                  with open(tmp, "wb") as out:
+                      out.write(struct.pack("<Q", len(raw)))
+                      out.write(raw)
+                      shutil.copyfileobj(f, out, 16 << 20)
+              os.replace(tmp, path)
+              print(f"lora keys renamed transformer. -> diffusion_model.: {os.path.basename(path)} ({count} keys)", flush=True)
+
+          api = HfApi()
+          target = os.environ["TARGET"]
+          api.create_repo(target, repo_type="model", private=False, exist_ok=True)
+          present = set(api.list_repo_files(target))
+          # One commit per added file, removed locally right after: the runner's disk cannot
+          # hold all new weights at once. The last commit printed is the one to pin.
+          last = None
+          for dest, src in WANT.items():
+              if dest in present:
+                  continue
+              local = os.path.join("/mnt/models", os.path.basename(dest))
+              if src[0] == "hf":
+                  path = hf_hub_download(src[1], src[2], revision=src[3], local_dir="/mnt/models/_hf")
+                  shutil.move(path, local)
+              else:
+                  civitai(src[1], src[2], local)
+              if dest.startswith("loras/"):
+                  fix_lora_keys(local)
+              print(f"downloaded {dest}: {os.path.getsize(local) / 1e9:.2f} GB", flush=True)
+              last = api.upload_file(path_or_fileobj=local, path_in_repo=dest, repo_id=target,
+                                     commit_message=f"Sync models: +{os.path.basename(dest)}").oid
+              print(f"committed {dest} -> {last}", flush=True)
+              os.remove(local)
+              shutil.rmtree("/mnt/models/_hf", ignore_errors=True)
+          deletes = sorted(present - set(WANT) - KEEP)
+          if deletes:
+              last = api.create_commit(target, operations=[CommitOperationDelete(path_in_repo=p) for p in deletes],
+                                       commit_message="Sync models: " + ", ".join("-" + p.split("/")[-1] for p in deletes)).oid
+          print(f"NEW COMMIT {last}" if last else "nothing to do")
+          print("files now:")
+          total = 0
+          for f in api.list_repo_tree(target, recursive=True):
+              size = getattr(f, "size", None)
+              if size:
+                  total += size
+                  print(f"  {f.path}  {size / 1e9:.2f} GB")
+          print(f"total {total / 1e9:.1f} GB")
