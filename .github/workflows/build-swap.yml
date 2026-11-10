@@ -9,7 +9,7 @@ on:
     branches: [main]
     tags: ["v*"]
     # Only changes that affect this image.
-    paths: ["Dockerfile.swap", "h3_handler.py", "swap_prepare.py", "h3_start.sh", ".github/workflows/build-swap.yml"]
+    paths: ["Dockerfile.swap", "h3_handler.py", "swap_prepare.py", "comfy_nodes/**", "h3_start.sh", ".github/workflows/build-swap.yml"]
   workflow_dispatch:
 
 permissions:

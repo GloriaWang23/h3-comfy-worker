@@ -87,6 +87,16 @@ class Graphs(unittest.TestCase):
         dangling = [v for n in g.values() for v in n["inputs"].values() if isinstance(v, list) and v[0] not in ids]
         self.assertEqual(dangling, [])
 
+    def test_shot_graph_sam_runs_without_cudnn(self):
+        # SAM3 text detection fails with "cuDNN Frontend error: No valid execution plans" on this
+        # image (torch 2.11 cu130, RTX 5090): detect / track go through the cuDNN-off wrappers.
+        g = sp.build_shot_graph("cs_prepared.mp4", 0, 48, "cs_s0")
+        types_ = [n["class_type"] for n in g.values()]
+        self.assertIn("CSwapSAM3Detect", types_)
+        self.assertIn("CSwapSAM3VideoTrack", types_)
+        self.assertNotIn("SAM3_Detect", types_)
+        self.assertNotIn("SAM3_VideoTrack", types_)
+
     def test_duration_param(self):
         self.assertEqual(sp.duration_param(9.9), 0.0)
         self.assertEqual(sp.duration_param(10.5), 0.0)

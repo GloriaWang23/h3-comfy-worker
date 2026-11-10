@@ -125,10 +125,11 @@ def build_shot_graph(prepared, start, length, prefix, max_objects=MAX_OBJECTS):
         "first": {"class_type": "ImageFromBatch", "inputs": {"image": ["shot", 0], "batch_index": 0, "length": 1}},
         "sam": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": SAM_FILE}},
         "text": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["sam", 1], "text": "person"}},
-        "detect": {"class_type": "SAM3_Detect", "inputs": {
+        # cuDNN-off wrappers (comfy_nodes/cswap_nodes): SAM3 text detection fails with cuDNN on this image
+        "detect": {"class_type": "CSwapSAM3Detect", "inputs": {
             "model": ["sam", 0], "image": ["first", 0], "conditioning": ["text", 0], "threshold": 0.35,
             "refine_iterations": 2, "individual_masks": True}},
-        "track": {"class_type": "SAM3_VideoTrack", "inputs": {
+        "track": {"class_type": "CSwapSAM3VideoTrack", "inputs": {
             "model": ["sam", 0], "images": ["shot", 0], "initial_mask": ["detect", 0], "conditioning": ["text", 0],
             "detection_threshold": 0.5, "max_objects": max_objects, "detect_interval": 1}},
     }
