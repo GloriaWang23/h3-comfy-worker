@@ -86,7 +86,11 @@ def cos_client():
     return _cos
 
 
-CONTENT_TYPES = {".mp4": "video/mp4", ".webm": "video/webm", ".png": "image/png", ".jpg": "image/jpeg"}
+CONTENT_TYPES = {".mp4": "video/mp4", ".webm": "video/webm", ".png": "image/png", ".jpg": "image/jpeg",
+                 ".npz": "application/octet-stream", ".json": "application/json"}
+# Endpoints whose jobs write several files (character-swap prepare: crops, masks) keep each file's
+# name under a per-job folder; the others keep the one-file key <job_id><ext>.
+UPLOAD_KEEP_NAMES = os.environ.get("UPLOAD_KEEP_NAMES", "") == "1"
 
 
 class Permanent(ValueError):
@@ -111,10 +115,22 @@ def retry(what, fn, attempts, first_delay=2.0):
 TIMINGS = {}
 
 
+def cos_key(job_id, file_location, keep_names):
+    ext = os.path.splitext(file_location)[1].lower()
+    if keep_names:
+        return f"{COS_PREFIX}/{time.strftime('%Y%m%d')}/{job_id}/{os.path.basename(file_location)}"
+    return f"{COS_PREFIX}/{time.strftime('%Y%m%d')}/{job_id}{ext}"
+
+
+def upload_files(job_id, paths):
+    """Upload several files of one job (names kept when UPLOAD_KEEP_NAMES); returns their URLs."""
+    return [upload_to_cos(job_id, p) for p in paths]
+
+
 def upload_to_cos(job_id, file_location, *args, **kwargs):
     """Drop-in for runpod's rp_upload.upload_image(job_id, file_location) -> url."""
     ext = os.path.splitext(file_location)[1].lower()
-    key = f"{COS_PREFIX}/{time.strftime('%Y%m%d')}/{job_id}{ext}"
+    key = cos_key(job_id, file_location, UPLOAD_KEEP_NAMES)
     t0 = time.time()
     retry(
         f"COS upload {key}",

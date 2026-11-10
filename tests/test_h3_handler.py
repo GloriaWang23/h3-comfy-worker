@@ -99,6 +99,19 @@ class Tests(unittest.TestCase):
     def job(self, media=(), unet="unet.safetensors"):
         return {"id": "j1", "input": {"workflow": {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet}}}, "media": list(media)}}
 
+    def test_cos_key_default_unchanged(self):
+        with mock.patch.object(h.time, "strftime", return_value="20261110"):
+            self.assertEqual(h.cos_key("abc", "/x/out/whatever.mp4", False), "p/20261110/abc.mp4")
+
+    def test_cos_key_keep_names(self):
+        with mock.patch.object(h.time, "strftime", return_value="20261110"):
+            self.assertEqual(h.cos_key("abc", "/x/out/cs_s0_o1.npz", True), "p/20261110/abc/cs_s0_o1.npz")
+
+    def test_upload_files_returns_urls(self):
+        f = os.path.join(self.tmp, "cs_s0.png"); open(f, "wb").write(b"x")
+        with mock.patch.object(h, "UPLOAD_KEEP_NAMES", True), mock.patch.object(h.time, "strftime", return_value="20261110"):
+            self.assertEqual(h.upload_files("j9", [f]), ["https://cdn/p/20261110/j9/cs_s0.png"])
+
     def test_missing_model_fails_fast(self):
         r = h.h3_handler(self.job(unet="nope.safetensors"))
         self.assertIn("diffusion_models/nope.safetensors", r["error"])
