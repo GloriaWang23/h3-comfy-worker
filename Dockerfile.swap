@@ -1,0 +1,29 @@
+# Character-swap worker (endpoint character-swap): the studio's H3 worker image (worker-comfyui
+# 5.10.0-base + torch 2.11.0+cu130 + ComfyUI v0.43.1 + h3_handler) plus akatz-ai/h3-relay
+# (windowed Ref2VA edit, mask / history nodes) at a pinned commit. SAM3 nodes are built into
+# ComfyUI v0.43.1. Weights come from Runpod's cached-model feature (Hugging Face repo
+# GloriaWang23/character-swap-runtime; set H3_MODEL_REPO / H3_MODEL_SHA on the template),
+# linked to /h3-models at start.
+ARG BASE_IMAGE=ghcr.io/gloriawang23/h3-comfy-worker:sha-0454363
+FROM ${BASE_IMAGE}
+
+ARG H3_RELAY_COMMIT=e2a7665b6eb8ea37a88c0de2c9c6b69a8f7c9220
+
+# 1. H3 Relay at a pinned commit (no Python dependencies of its own).
+RUN git clone https://github.com/akatz-ai/h3-relay.git /comfyui/custom_nodes/h3-relay \
+    && cd /comfyui/custom_nodes/h3-relay \
+    && git checkout ${H3_RELAY_COMMIT} \
+    && rm -rf .git examples docs tests
+
+# 2. SAM3.1 loads through CheckpointLoaderSimple: map checkpoints/ in the cached snapshot too.
+RUN printf '  checkpoints: checkpoints/\n' >> /comfyui/extra_model_paths.yaml \
+    && tail -n 7 /comfyui/extra_model_paths.yaml
+
+COPY h3_handler.py /h3_handler.py
+
+# Build-time smoke test: the custom node must import and register on CPU.
+RUN cd /comfyui && timeout 300 python main.py --quick-test-for-ci --cpu 2>&1 | tee /tmp/quick.log \
+    && ! grep -q "IMPORT FAILED" /tmp/quick.log \
+    && echo "h3-relay ${H3_RELAY_COMMIT}" >> /comfyui/.h3_version
+
+CMD ["/h3_start.sh"]

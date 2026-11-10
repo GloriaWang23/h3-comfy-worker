@@ -1,0 +1,96 @@
+name: sync swap models
+
+# Makes the Hugging Face repo the character-swap endpoint caches (GloriaWang23/character-swap-runtime,
+# created public if missing) hold exactly the files in WANT and deletes the rest. Shared H3 files
+# are copied from h3-comfy-runtime at a pinned commit; every source is pinned. The endpoint pins a commit, so nothing changes for it until its model
+# reference and H3_MODEL_SHA are moved to the commit this prints. Needs the secret HF_TOKEN.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      TARGET: GloriaWang23/character-swap-runtime
+    steps:
+      - name: Disk
+        run: |
+          sudo mkdir -p /mnt/models && sudo chown "$USER" /mnt/models
+          df -h / /mnt
+
+      - run: pip install -q -U "huggingface_hub[hf_xet]"
+
+      - name: Download, then commit add + deletes
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        shell: python
+        run: |
+          import os, shutil
+          from huggingface_hub import CommitOperationDelete, HfApi, hf_hub_download
+
+          # path in target -> ("hf", source repo, file, revision)
+          RT = ("GloriaWang23/h3-comfy-runtime", "22bec3a0d3f656bf041230a9d40109d3e36e449a")
+          def rt(p): return ("hf", RT[0], p, RT[1])
+          WANT = {
+              # H3 Ref2VA base, text encoder, VAEs (Comfy-Org repack, as the h3-hf endpoint)
+              "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": rt("diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"),
+              "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": rt("text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"),
+              "vae/minimax_h3_video_vae_int8_convrot.safetensors": rt("vae/minimax_h3_video_vae_int8_convrot.safetensors"),
+              "vae/minimax_h3_audio_vae_fp32.safetensors": rt("vae/minimax_h3_audio_vae_fp32.safetensors"),
+              # NSFW base candidate (turbo baked in) and NSFW LoRA candidate
+              "diffusion_models/10Eros_Max_h3_8stepTURBO_beta7_int8HQ.safetensors": rt("diffusion_models/10Eros_Max_h3_8stepTURBO_beta7_int8HQ.safetensors"),
+              "loras/MysticXXX_MMH3-V5-ref2va.safetensors": rt("loras/MysticXXX_MMH3-V5-ref2va.safetensors"),
+              # akatz recipe: Character Swap v1.5 + lightx2v FL2V Turbo 8-step v1.0 768p
+              "loras/h3_character_swap_v1.5.safetensors":
+                  ("hf", "akatz-ai/MiniMax-H3-Character-Swap-LoRA", "h3_character_swap_v1.5.safetensors", "96ea3407b230b6f7df71c58c70e31df96bd7e533"),
+              "loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors":
+                  ("hf", "lightx2v/Minimax-h3-Turbo", "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", "30f485ed874aa44c8183348ad361c5eabad318da"),
+              # BFS (Alissonerdx) recipes: Character Swap v1.1, Head Swap v1.0, DMD Ref2VA 8-step turbo
+              "loras/minimax_h3_character_swap_v1.1_ref2va_fro.safetensors":
+                  ("hf", "Alissonerdx/Minimax-H3-ComfyUI", "loras/minimax_h3_character_swap_v1.1_ref2va_fro.safetensors", "64244a4fdf226c8d37b8470d1893b6ba9ab54de1"),
+              "loras/minimax_h3_head_swap_v1.0_r32.safetensors":
+                  ("hf", "Alissonerdx/Minimax-H3-ComfyUI", "loras/minimax_h3_head_swap_v1.0_r32.safetensors", "64244a4fdf226c8d37b8470d1893b6ba9ab54de1"),
+              "loras/minimax_h3_dmd_ref2va_8step_turbo_pruned.safetensors":
+                  ("hf", "drbaph/MiniMax-H3-Turbo-Lora-ComfyUI", "experimental/minimax_h3_dmd_ref2va_8step_turbo_pruned.safetensors", "bb2bc497cbaca89dadd0bcf1856eed4f8275be20"),
+              # SAM3.1 (person detection / tracking for templates)
+              "checkpoints/sam3.1_multiplex_fp16.safetensors":
+                  ("hf", "Comfy-Org/sam3.1", "checkpoints/sam3.1_multiplex_fp16.safetensors", "7bb8374780a725b4353ed31f3a9395c9742b5621"),
+          }
+          KEEP = {"README.md", ".gitattributes"}
+
+          api = HfApi()
+          target = os.environ["TARGET"]
+          api.create_repo(target, repo_type="model", private=False, exist_ok=True)
+          present = set(api.list_repo_files(target))
+          # One commit per added file, removed locally right after. The last commit printed is
+          # the one to pin.
+          last = None
+          for dest, src in WANT.items():
+              if dest in present:
+                  continue
+              local = os.path.join("/mnt/models", os.path.basename(dest))
+              if src[0] == "hf":
+                  path = hf_hub_download(src[1], src[2], revision=src[3], local_dir="/mnt/models/_hf")
+                  shutil.move(path, local)
+              print(f"downloaded {dest}: {os.path.getsize(local) / 1e9:.2f} GB", flush=True)
+              last = api.upload_file(path_or_fileobj=local, path_in_repo=dest, repo_id=target,
+                                     commit_message=f"Sync models: +{os.path.basename(dest)}").oid
+              print(f"committed {dest} -> {last}", flush=True)
+              os.remove(local)
+              shutil.rmtree("/mnt/models/_hf", ignore_errors=True)
+          deletes = sorted(present - set(WANT) - KEEP)
+          if deletes:
+              last = api.create_commit(target, operations=[CommitOperationDelete(path_in_repo=p) for p in deletes],
+                                       commit_message="Sync models: " + ", ".join("-" + p.split("/")[-1] for p in deletes)).oid
+          print(f"NEW COMMIT {last}" if last else "nothing to do")
+          print("files now:")
+          total = 0
+          for f in api.list_repo_tree(target, recursive=True):
+              if getattr(f, "size", None):
+                  total += f.size
+                  print(f"  {f.path}  {f.size / 1e9:.2f} GB")
+          print(f"total {total / 1e9:.1f} GB")
