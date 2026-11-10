@@ -10,6 +10,9 @@ import unittest
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Local test servers; never send them through a developer machine's HTTP proxy.
+for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+    os.environ.pop(k, None)
 sys.path.insert(0, ROOT)
 import swap_prepare as sp  # noqa: E402
 
