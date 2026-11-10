@@ -170,6 +170,21 @@ def build_mask_file(plan, input_dir):
     return path
 
 
+def wait_ready(url, timeout_s=180, every_s=2.0):
+    """True once ComfyUI answers /system_stats. The prepare task bypasses the stock handler, which
+    otherwise does this wait, and is often the first job on a cold worker."""
+    import time, urllib.request
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        try:
+            if urllib.request.urlopen(f"{url}/system_stats", timeout=5).status == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(every_s)
+    return False
+
+
 def comfy_run(graph, url, timeout_s=900):
     """Queue a graph on the local ComfyUI and wait; raises on an execution error."""
     import json, time, urllib.request, uuid
@@ -224,6 +239,8 @@ def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, 
     """task "prepare": template video (input.media[0]) -> manifest (see the plan, Task 3)."""
     import glob, os
     from PIL import Image
+    if not wait_ready(comfy_url):
+        raise RuntimeError("ComfyUI did not come up")
     name = os.path.basename(job_input["media"][0]["name"])
     seconds, had_audio = _probe(os.path.join(input_dir, name))
     dur = duration_param(seconds)

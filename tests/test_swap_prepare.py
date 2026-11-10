@@ -122,6 +122,22 @@ class People(unittest.TestCase):
         self.assertTrue((c == 255).all())
 
 
+class Ready(unittest.TestCase):
+    def test_wait_ready_up(self):
+        import http.server, threading
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.assertTrue(sp.wait_ready(f"http://127.0.0.1:{srv.server_address[1]}", timeout_s=5))
+
+    def test_wait_ready_down(self):
+        self.assertFalse(sp.wait_ready("http://127.0.0.1:9", timeout_s=1.5, every_s=0.5))
+
+
 class MaskPlan(unittest.TestCase):
     def test_mask_plan_build(self):
         d = tempfile.mkdtemp()
