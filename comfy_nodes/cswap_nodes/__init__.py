@@ -13,13 +13,24 @@ import torch
 
 @contextlib.contextmanager
 def no_cudnn():
+    """cuDNN off for convolutions and attention. ComfyUI's attention wraps every SDPA call in
+    sdpa_kernel(comfy.ops.SDPA_BACKEND_PRIORITY, set_priority=True), which lists CUDNN_ATTENTION and
+    overrides the global cudnn-sdp switch, so that list is filtered for the duration too."""
+    import comfy.ops
+    prio = getattr(comfy.ops, "SDPA_BACKEND_PRIORITY", None)
+    saved_prio = list(prio) if prio is not None else None
     sdp = torch.backends.cuda.cudnn_sdp_enabled()
     torch.backends.cuda.enable_cudnn_sdp(False)
+    if prio is not None:
+        from torch.nn.attention import SDPBackend
+        prio[:] = [b for b in prio if b != SDPBackend.CUDNN_ATTENTION]
     try:
         with torch.backends.cudnn.flags(enabled=False):
             yield
     finally:
         torch.backends.cuda.enable_cudnn_sdp(sdp)
+        if saved_prio is not None:
+            prio[:] = saved_prio
 
 from comfy_extras.nodes_sam3 import SAM3_Detect, SAM3_VideoTrack
 
