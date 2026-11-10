@@ -140,6 +140,14 @@ class Ready(unittest.TestCase):
     def test_wait_ready_down(self):
         self.assertFalse(sp.wait_ready("http://127.0.0.1:9", timeout_s=1.5, every_s=0.5))
 
+    def test_comfy_error_names_node_and_trace(self):
+        st = {"status_str": "error", "messages": [["execution_error", {"node_id": "detect", "node_type": "CSwapSAM3Detect",
+              "exception_message": "cuDNN Frontend error", "traceback": ["a", "File x.py, line 3, in forward\n", "  attn(q, k, v)\n"]}]]}
+        msg = sp.comfy_error(st)
+        self.assertIn("CSwapSAM3Detect", msg)
+        self.assertIn("cuDNN Frontend error", msg)
+        self.assertIn("attn(q, k, v)", msg)
+
 
 class MaskPlan(unittest.TestCase):
     def test_mask_plan_build(self):

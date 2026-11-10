@@ -1,11 +1,26 @@
-"""character-swap helper nodes: ComfyUI's SAM3 detect / video track with cuDNN switched off.
+"""character-swap helper nodes: ComfyUI's SAM3 detect / video track without cuDNN.
 
 On the character-swap worker image (torch 2.11 cu130, RTX 5090) SAM3's text-prompted detection
-fails with "cuDNN Frontend error: [cudnn_frontend] Error: No valid execution plans built". These
-wrappers run the stock nodes inside torch.backends.cudnn.flags(enabled=False) and restore it
-afterwards, so the H3 graphs on the same worker keep cuDNN.
+fails with "cuDNN Frontend error: [cudnn_frontend] Error: No valid execution plans built". cuDNN is
+used both by convolutions and by scaled_dot_product_attention's cuDNN backend; these wrappers turn
+both off around the stock nodes and restore them afterwards, so the H3 graphs on the same worker
+keep cuDNN.
 """
+import contextlib
+
 import torch
+
+
+@contextlib.contextmanager
+def no_cudnn():
+    sdp = torch.backends.cuda.cudnn_sdp_enabled()
+    torch.backends.cuda.enable_cudnn_sdp(False)
+    try:
+        with torch.backends.cudnn.flags(enabled=False):
+            yield
+    finally:
+        torch.backends.cuda.enable_cudnn_sdp(sdp)
+
 from comfy_extras.nodes_sam3 import SAM3_Detect, SAM3_VideoTrack
 
 
@@ -21,7 +36,7 @@ class CSwapSAM3Detect:
     CATEGORY = "character-swap"
 
     def run(self, model, image, conditioning, threshold, refine_iterations, individual_masks):
-        with torch.backends.cudnn.flags(enabled=False):
+        with no_cudnn():
             out = SAM3_Detect.execute(model=model, image=image, conditioning=conditioning, threshold=threshold,
                                       refine_iterations=refine_iterations, individual_masks=individual_masks)
         return (out[0],)
@@ -39,7 +54,7 @@ class CSwapSAM3VideoTrack:
     CATEGORY = "character-swap"
 
     def run(self, images, model, initial_mask, conditioning, detection_threshold, max_objects, detect_interval):
-        with torch.backends.cudnn.flags(enabled=False):
+        with no_cudnn():
             out = SAM3_VideoTrack.execute(images=images, model=model, initial_mask=initial_mask, conditioning=conditioning,
                                           detection_threshold=detection_threshold, max_objects=max_objects,
                                           detect_interval=detect_interval)

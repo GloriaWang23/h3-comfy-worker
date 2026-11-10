@@ -185,6 +185,14 @@ def wait_ready(url, timeout_s=180, every_s=2.0):
     return False
 
 
+def comfy_error(status):
+    """'ComfyUI error in <node_type> (<node_id>): <message> | <last traceback lines>'."""
+    e = next((m[1] for m in status.get("messages", []) if m[0] == "execution_error"), {})
+    tail = " ".join(x.strip() for x in (e.get("traceback") or [])[-2:])
+    return (f"ComfyUI error in {e.get('node_type', '?')} ({e.get('node_id', '?')}): "
+            f"{str(e.get('exception_message', '')).strip()[:400]} | {tail[-600:]}")
+
+
 def comfy_run(graph, url, timeout_s=900):
     """Queue a graph on the local ComfyUI and wait; raises on an execution error."""
     import json, time, urllib.request, uuid
@@ -198,8 +206,7 @@ def comfy_run(graph, url, timeout_s=900):
         h = json.load(urllib.request.urlopen(f"{url}/history/{pid}", timeout=30))
         st = h.get(pid, {}).get("status", {})
         if st.get("status_str") == "error":
-            msg = next((m[1].get("exception_message", "") for m in st.get("messages", []) if m[0] == "execution_error"), "")
-            raise RuntimeError(f"ComfyUI error: {msg.strip()[:500]}")
+            raise RuntimeError(comfy_error(st))
         if st.get("completed"):
             return h[pid]
     raise TimeoutError("ComfyUI prepare step timed out")
