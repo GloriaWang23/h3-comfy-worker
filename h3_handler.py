@@ -276,6 +276,26 @@ if _stock_get_history:
     base.get_history = get_history
 
 
+def run_task(job):
+    """character-swap tasks: "prepare" runs swap_prepare's own ComfyUI graphs and returns a manifest;
+    "swap" with a mask_plan first joins the per-shot masks into one input file. Everything else is
+    the stock handler (the workflow in input.workflow)."""
+    task = job["input"].get("task")
+    try:
+        if task == "prepare":
+            import swap_prepare
+            return {"prepare": swap_prepare.run_prepare(
+                job["input"], job["id"], input_dir=INPUT_DIR, output_dir=OUTPUT_DIR,
+                upload=upload_files, comfy_url=COMFY_URL)}
+        if task == "swap" and job["input"].get("mask_plan"):
+            import swap_prepare
+            swap_prepare.build_mask_file(job["input"]["mask_plan"], INPUT_DIR)
+    except Exception as e:  # surfaced like the stock handler's errors
+        print(f"h3-handler - {task} failed: {e}")
+        return {"error": f"{task}: {e}"}
+    return base.handler(job)
+
+
 def h3_handler(job):
     global JOBS_DONE
     t_start = time.time()
@@ -299,7 +319,7 @@ def h3_handler(job):
         threading.Thread(target=watch_cancel, args=(job["id"], done), daemon=True).start()
         t0 = time.time()
         try:
-            result = base.handler(job)
+            result = run_task(job)
         finally:
             done.set()
         timings["comfy_s"] = round(time.time() - t0 - TIMINGS.get("upload_s", 0), 1)
@@ -315,7 +335,8 @@ def h3_handler(job):
         print(f"h3-handler - timings {timings}")
         return result
     finally:
-        cleanup(paths)
+        # character-swap leaves its prepared video / joined mask in the input directory
+        cleanup(paths + glob.glob(os.path.join(INPUT_DIR, "cs_*")) + glob.glob(os.path.join(INPUT_DIR, "mask_*.npz")))
 
 
 if COS_BUCKET:

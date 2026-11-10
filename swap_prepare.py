@@ -87,3 +87,176 @@ def concat_masks(parts, total):
     if len(joined) != total:
         raise ValueError(f"mask frames {len(joined)} != source_frames {total}")
     return joined
+
+
+# ----------------------------------------------------------------------------------------------
+# prepare flow: ComfyUI graphs + manifest
+
+MAX_SECONDS = 10.5      # longer templates keep their first 10 s (H3 Relay trims to its 17n+5 grid)
+MAX_OBJECTS = 3
+SAM_FILE = "sam3.1_multiplex_fp16.safetensors"
+
+
+def duration_param(seconds):
+    """H3RelayPrepareSource duration_seconds for a template: 0 = whole clip, 10 = first 10 s."""
+    return 0.0 if seconds <= MAX_SECONDS else 10.0
+
+
+def build_prepare_graph(video, resolution, duration_seconds):
+    """Prepare the template exactly as the swap graph does (24 fps, resolution) and save it."""
+    return {
+        "source": {"class_type": "LoadVideo", "inputs": {"file": video}},
+        "prepare": {"class_type": "H3RelayPrepareSource", "inputs": {
+            "video": ["source", 0], "resolution": resolution, "duration_seconds": float(duration_seconds),
+            "missing_audio": "silence"}},
+        "save": {"class_type": "SaveVideo", "inputs": {
+            "video": ["prepare", 8], "filename_prefix": "cs_prepared", "format": "mp4", "format.codec": "h264",
+            "format.codec.encoding": "re-encode", "format.codec.encoding.crf": 16}},
+    }
+
+
+def build_shot_graph(prepared, start, length, prefix, max_objects=MAX_OBJECTS):
+    """One shot: SAM3 detects people on its first frame, tracks them through the shot (re-detecting
+    by text every frame), and saves one mask sequence per object slot (empty when unused)."""
+    g = {
+        "video": {"class_type": "LoadVideo", "inputs": {"file": prepared}},
+        "parts": {"class_type": "GetVideoComponents", "inputs": {"video": ["video", 0]}},
+        "shot": {"class_type": "ImageFromBatch", "inputs": {"image": ["parts", 0], "batch_index": start, "length": length}},
+        "first": {"class_type": "ImageFromBatch", "inputs": {"image": ["shot", 0], "batch_index": 0, "length": 1}},
+        "sam": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": SAM_FILE}},
+        "text": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["sam", 1], "text": "person"}},
+        "detect": {"class_type": "SAM3_Detect", "inputs": {
+            "model": ["sam", 0], "image": ["first", 0], "conditioning": ["text", 0], "threshold": 0.35,
+            "refine_iterations": 2, "individual_masks": True}},
+        "track": {"class_type": "SAM3_VideoTrack", "inputs": {
+            "model": ["sam", 0], "images": ["shot", 0], "initial_mask": ["detect", 0], "conditioning": ["text", 0],
+            "detection_threshold": 0.5, "max_objects": max_objects, "detect_interval": 1}},
+    }
+    for i in range(max_objects):
+        g[f"mask{i}"] = {"class_type": "SAM3_TrackToMask", "inputs": {"track_data": ["track", 0], "object_indices": str(i)}}
+        g[f"save{i}"] = {"class_type": "H3RelaySaveMask", "inputs": {
+            "masks": [f"mask{i}", 0], "filename_prefix": f"{prefix}_o{i}", "frames": length}}
+    return g
+
+
+def people_from_masks(masks_by_obj, frames):
+    """Non-empty objects of one shot -> [{obj, frame, bbox, area, crop (H,W,3 uint8)}]."""
+    out = []
+    for obj, m in sorted(masks_by_obj.items()):
+        m = np.asarray(m) > 0.5
+        if not m.any():
+            continue
+        f = best_frame(m)
+        x0, y0, x1, y1 = crop_box(m[f])
+        out.append({"obj": int(obj), "frame": f, "bbox": [x0, y0, x1, y1],
+                    "area": round(float(m[f].mean()), 4), "crop": np.asarray(frames[f])[y0:y1, x0:x1]})
+    return out
+
+
+def build_mask_file(plan, input_dir):
+    """swap input.mask_plan {name, total, parts: [{media} | {zeros}]} -> <input_dir>/<name> (key 'mask')."""
+    import os
+    parts = []
+    for p in plan["parts"]:
+        if "zeros" in p:
+            parts.append(int(p["zeros"]))
+        else:
+            with np.load(os.path.join(input_dir, os.path.basename(p["media"])), allow_pickle=False) as z:
+                parts.append(z["mask"])
+    mask = concat_masks(parts, int(plan["total"]))
+    path = os.path.join(input_dir, os.path.basename(plan["name"]))
+    np.savez_compressed(path, mask=mask)
+    return path
+
+
+def comfy_run(graph, url, timeout_s=900):
+    """Queue a graph on the local ComfyUI and wait; raises on an execution error."""
+    import json, time, urllib.request, uuid
+    pid = str(uuid.uuid4())
+    req = urllib.request.Request(f"{url}/prompt", json.dumps({"prompt": graph, "prompt_id": pid}).encode(),
+                                 {"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=30).read()
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        time.sleep(1)
+        h = json.load(urllib.request.urlopen(f"{url}/history/{pid}", timeout=30))
+        st = h.get(pid, {}).get("status", {})
+        if st.get("status_str") == "error":
+            msg = next((m[1].get("exception_message", "") for m in st.get("messages", []) if m[0] == "execution_error"), "")
+            raise RuntimeError(f"ComfyUI error: {msg.strip()[:500]}")
+        if st.get("completed"):
+            return h[pid]
+    raise TimeoutError("ComfyUI prepare step timed out")
+
+
+def _decode(path):
+    import av
+    with av.open(path) as c:
+        return np.stack([f.to_ndarray(format="rgb24") for f in c.decode(video=0)])
+
+
+def _fps(path):
+    import av
+    with av.open(path) as c:
+        return float(c.streams.video[0].average_rate or 24)
+
+
+def original_crop(orig, orig_fps, idx24, bbox, prepared_wh):
+    """Crop a person from the original video (sharper than the prepared frames): prepared frame
+    idx24 at 24 fps -> nearest original frame, bbox scaled from the prepared size."""
+    i = min(len(orig) - 1, int(round(idx24 * orig_fps / 24.0)))
+    oh, ow = orig.shape[1:3]
+    sx, sy = ow / prepared_wh[0], oh / prepared_wh[1]
+    x0, y0, x1, y1 = bbox
+    return np.ascontiguousarray(orig[i, int(y0 * sy):int(round(y1 * sy)), int(x0 * sx):int(round(x1 * sx))])
+
+
+def _probe(path):
+    import av
+    with av.open(path) as c:
+        v = c.streams.video[0]
+        secs = float(c.duration / 1e6) if c.duration else float(v.duration * v.time_base)
+        return secs, len(c.streams.audio) > 0
+
+
+def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, resolution="480"):
+    """task "prepare": template video (input.media[0]) -> manifest (see the plan, Task 3)."""
+    import glob, os
+    from PIL import Image
+    name = os.path.basename(job_input["media"][0]["name"])
+    seconds, had_audio = _probe(os.path.join(input_dir, name))
+    dur = duration_param(seconds)
+    comfy_run(build_prepare_graph(name, resolution, dur), comfy_url)
+    saved = sorted(glob.glob(os.path.join(output_dir, "**", "cs_prepared*.mp4"), recursive=True))[-1]
+    prepared = "cs_prepared.mp4"
+    os.replace(saved, os.path.join(input_dir, prepared))
+    frames = _decode(os.path.join(input_dir, prepared))
+    n, h, w = frames.shape[:3]
+    orig, orig_fps = _decode(os.path.join(input_dir, name)), _fps(os.path.join(input_dir, name))
+    files, shots = [os.path.join(input_dir, prepared)], []
+    for s, (start, end) in enumerate(detect_shots(frames)):
+        prefix = f"cs_s{s}"
+        comfy_run(build_shot_graph(prepared, start, end - start, prefix), comfy_url)
+        masks = {}
+        for i in range(MAX_OBJECTS):
+            with np.load(os.path.join(output_dir, f"{prefix}_o{i}.npz"), allow_pickle=False) as z:
+                masks[i] = z["mask"]
+        thumb = os.path.join(output_dir, f"{prefix}_thumb.jpg")
+        Image.fromarray(frames[start]).save(thumb, quality=88)
+        files.append(thumb)
+        people = []
+        for p in people_from_masks(masks, frames[start:end]):
+            p.pop("crop")
+            crop = os.path.join(output_dir, f"{prefix}_o{p['obj']}_crop.png")
+            Image.fromarray(original_crop(orig, orig_fps, start + p["frame"], p["bbox"], (w, h))).save(crop)
+            files += [crop, os.path.join(output_dir, f"{prefix}_o{p['obj']}.npz")]
+            people.append({**p, "crop": os.path.basename(crop), "mask": f"{prefix}_o{p['obj']}.npz"})
+        shots.append({"start": start, "end": end, "thumb": os.path.basename(thumb), "people": people})
+    urls = dict(zip([os.path.basename(f) for f in files], upload(job_id, files)))
+    for sh in shots:
+        sh["thumb"] = urls[sh["thumb"]]
+        for p in sh["people"]:
+            p["crop"], p["mask"] = urls[p["crop"]], urls[p["mask"]]
+    return {"source_frames": int(n), "fps": 24, "width": int(w), "height": int(h), "duration_s": round(seconds, 2),
+            "duration_param": dur, "trimmed": dur > 0, "had_audio": had_audio, "resolution": resolution,
+            "prepared_video": urls[prepared], "shots": shots}

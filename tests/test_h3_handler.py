@@ -112,6 +112,34 @@ class Tests(unittest.TestCase):
         with mock.patch.object(h, "UPLOAD_KEEP_NAMES", True), mock.patch.object(h.time, "strftime", return_value="20261110"):
             self.assertEqual(h.upload_files("j9", [f]), ["https://cdn/p/20261110/j9/cs_s0.png"])
 
+    def test_prepare_task_routes_to_swap_prepare(self):
+        fake = types.ModuleType("swap_prepare")
+        fake.run_prepare = lambda job_input, job_id, **ctx: {"source_frames": 240, "shots": []}
+        with mock.patch.dict(sys.modules, {"swap_prepare": fake}):
+            r = h.h3_handler({"id": "jp", "input": {"task": "prepare", "media": []}})
+        self.assertEqual(r["prepare"]["source_frames"], 240)
+        self.assertIn("timings", r)
+
+    def test_swap_mask_plan_built_before_run(self):
+        calls = []
+        fake = types.ModuleType("swap_prepare")
+        fake.build_mask_file = lambda plan, d: calls.append(plan["name"]) or os.path.join(d, plan["name"])
+        base_result["v"] = {"images": []}
+        with mock.patch.dict(sys.modules, {"swap_prepare": fake}):
+            h.h3_handler({"id": "js", "input": {"task": "swap", "workflow": {}, "media": [],
+                                                 "mask_plan": {"name": "mask_p.npz", "total": 1, "parts": []}}})
+        self.assertEqual(calls, ["mask_p.npz"])
+
+    def test_bad_mask_plan_fails_job(self):
+        fake = types.ModuleType("swap_prepare")
+        def boom(plan, d):
+            raise ValueError("mask frames 3 != source_frames 4")
+        fake.build_mask_file = boom
+        with mock.patch.dict(sys.modules, {"swap_prepare": fake}):
+            r = h.h3_handler({"id": "jb", "input": {"task": "swap", "workflow": {}, "media": [],
+                                                     "mask_plan": {"name": "m.npz", "total": 4, "parts": []}}})
+        self.assertIn("!= source_frames", r["error"])
+
     def test_missing_model_fails_fast(self):
         r = h.h3_handler(self.job(unet="nope.safetensors"))
         self.assertIn("diffusion_models/nope.safetensors", r["error"])
