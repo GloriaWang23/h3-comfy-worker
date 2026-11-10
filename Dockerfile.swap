@@ -20,6 +20,8 @@ RUN printf '  checkpoints: checkpoints/\n' >> /comfyui/extra_model_paths.yaml \
     && tail -n 7 /comfyui/extra_model_paths.yaml
 
 COPY h3_handler.py /h3_handler.py
+COPY swap_prepare.py /swap_prepare.py
+RUN cd / && python -c "import swap_prepare, av, PIL; print('swap_prepare ok')"
 
 # Build-time smoke test: the custom node must import and register on CPU.
 RUN cd /comfyui && timeout 300 python main.py --quick-test-for-ci --cpu 2>&1 | tee /tmp/quick.log \
