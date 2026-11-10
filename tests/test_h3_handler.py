@@ -114,10 +114,12 @@ class Tests(unittest.TestCase):
 
     def test_prepare_task_routes_to_swap_prepare(self):
         fake = types.ModuleType("swap_prepare")
-        fake.run_prepare = lambda job_input, job_id, **ctx: {"source_frames": 240, "shots": []}
+        seen = {}
+        fake.run_prepare = lambda job_input, job_id, **ctx: seen.update(media=job_input.get("media")) or {"source_frames": 240, "shots": []}
         with mock.patch.dict(sys.modules, {"swap_prepare": fake}):
-            r = h.h3_handler({"id": "jp", "input": {"task": "prepare", "media": []}})
+            r = h.h3_handler({"id": "jp", "input": {"task": "prepare", "media": [{"name": "cs_src.mp4", "url": f"{self.url}/v.mp4"}]}})
         self.assertEqual(r["prepare"]["source_frames"], 240)
+        self.assertEqual([m["name"] for m in seen["media"]], ["cs_src.mp4"])
         self.assertIn("timings", r)
 
     def test_swap_mask_plan_built_before_run(self):

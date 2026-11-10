@@ -276,7 +276,7 @@ if _stock_get_history:
     base.get_history = get_history
 
 
-def run_task(job):
+def run_task(job, media=()):
     """character-swap tasks: "prepare" runs swap_prepare's own ComfyUI graphs and returns a manifest;
     "swap" with a mask_plan first joins the per-shot masks into one input file. Everything else is
     the stock handler (the workflow in input.workflow)."""
@@ -284,8 +284,9 @@ def run_task(job):
     try:
         if task == "prepare":
             import swap_prepare
+            # h3_handler took input.media off the job (downloaded); prepare reads the template from it
             return {"prepare": swap_prepare.run_prepare(
-                job["input"], job["id"], input_dir=INPUT_DIR, output_dir=OUTPUT_DIR,
+                {**job["input"], "media": media}, job["id"], input_dir=INPUT_DIR, output_dir=OUTPUT_DIR,
                 upload=upload_files, comfy_url=COMFY_URL)}
         if task == "swap" and job["input"].get("mask_plan"):
             import swap_prepare
@@ -319,7 +320,7 @@ def h3_handler(job):
         threading.Thread(target=watch_cancel, args=(job["id"], done), daemon=True).start()
         t0 = time.time()
         try:
-            result = run_task(job)
+            result = run_task(job, media)
         finally:
             done.set()
         timings["comfy_s"] = round(time.time() - t0 - TIMINGS.get("upload_s", 0), 1)
