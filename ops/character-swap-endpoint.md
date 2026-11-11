@@ -7,7 +7,7 @@ experiments: `character-swap/RESULTS.md`; smoke: `character-swap/tools/smoke_swa
 |---|---|
 | endpoint | `character-swap` — `sxzztytrk1vudj` |
 | template | `character-swap-template` — `lxtihcgb1l` |
-| image | `ghcr.io/gloriawang23/character-swap-worker:sha-2764b66` (Dockerfile.swap: H3 image sha-0454363 + h3-relay e2a7665 + cswap_nodes + insightface buffalo_l + swap_prepare.py / swap_faces.py) |
+| image | `ghcr.io/gloriawang23/character-swap-worker:sha-b3772aa` (Dockerfile.swap: H3 image sha-0454363 + h3-relay e2a7665 + cswap_nodes incl. CSwapSeedTrack + insightface buffalo_l + swap_prepare.py / swap_faces.py) |
 | GPU | RTX 5090, CUDA ≥ 13.0 |
 | workers | min 0 / max 1, FlashBoot, queue delay 4 s |
 | timeouts | execution 1800 s (studio: prepare 1500 s, swap pass 2× estimate within 300–1800 s), idle 15 s |
@@ -40,3 +40,12 @@ alone left a warm worker on the old image; the script also releases the endpoint
 | studio | Vercel env `RUNPOD_VL38_ENDPOINT_ID`; `endpoint_config` row `vl38`; watchdog row 7; called from `api/swap.ts` only |
 
 First smoke 2026-11-11: cold start ~3 min, 11–12 s per template (8 frames + 2 crops, ~4.5k prompt tokens).
+
+Round 3 (2026-11-11, image sha-b3772aa): optional edit regions come from `CSwapSeedTrack` inside the
+swap graph (SAM3 point prompts on the person's clearest face frame, tracked forward and backward; a
+person region opens up where tracking loses the person, a head region stays closed), used by the
+`box` designation and by head mode through akatz. Prepare accepts `input.start` (10 s from that
+offset; the cut clip is uploaded as `cs_source.mp4` and swaps run on it). Smoke: box 367 s (first
+model load), akatz head 212 s, two target pictures 204 s, all at 480.
+Prompt lesson: naming tattoos or jewelry in the prompt — even as "do not add tattoos" — makes the
+model draw them; the studio prompt mentions neither.
