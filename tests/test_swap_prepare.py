@@ -166,6 +166,15 @@ class ManifestV2(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-t") + 1], "15.000")                       # at most 15 s kept
         self.assertEqual(cmd[-1], "out.mp4")
         self.assertIsNone(sp.trim_command("in.mp4", "out.mp4", 0, 15.0))         # 15 s fits: nothing to cut
+        # an explicit range [start, end): its length is kept (at most 15 s), even inside a short clip
+        r = sp.trim_command("in.mp4", "out.mp4", 2.0, 12.0, end=7.5)
+        self.assertEqual((r[r.index("-ss") + 1], r[r.index("-t") + 1]), ("2.000", "5.500"))
+        r = sp.trim_command("in.mp4", "out.mp4", 0, 12.0, end=6.0)
+        self.assertEqual((r[r.index("-ss") + 1], r[r.index("-t") + 1]), ("0.000", "6.000"))
+        r = sp.trim_command("in.mp4", "out.mp4", 5.0, 60.0, end=50.0)
+        self.assertEqual(r[r.index("-t") + 1], "15.000")
+        self.assertIsNone(sp.trim_command("in.mp4", "out.mp4", 0, 8.0, end=8.0))  # the whole clip: nothing to cut
+        self.assertIsNone(sp.trim_command("in.mp4", "out.mp4", 0, 8.0, end=7.97))
         long = sp.trim_command("in.mp4", "out.mp4", 0, 40.0)
         self.assertEqual(long[long.index("-t") + 1], "15.000")
 

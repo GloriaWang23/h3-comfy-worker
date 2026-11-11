@@ -255,17 +255,22 @@ def key_frames(n, count=None):
     return [int(round(i * (n - 1) / (count - 1))) for i in range(count)]
 
 
-def trim_command(src, dst, start, seconds, keep=KEEP_SECONDS):
-    """ffmpeg command that keeps `keep` seconds from `start` (re-encoded near-losslessly, audio kept),
-    or None when the clip is already short enough and starts at 0."""
-    if start <= 0 and seconds <= MAX_SECONDS:
+def trim_command(src, dst, start, seconds, keep=KEEP_SECONDS, end=None):
+    """ffmpeg command that keeps [start, end) — at most `keep` seconds — re-encoded near-losslessly
+    with audio; without `end`, `keep` seconds from `start`. None when that is the whole clip already."""
+    start = max(0.0, start)
+    if end is not None and end > start:
+        if start <= 0 and end >= seconds - 0.05 and seconds <= MAX_SECONDS:
+            return None
+        keep = min(keep, end - start)
+    elif start <= 0 and seconds <= MAX_SECONDS:
         return None
-    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss", f"{max(0.0, start):.3f}", "-i", src,
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss", f"{start:.3f}", "-i", src,
             "-t", f"{keep:.3f}", "-c:v", "libx264", "-preset", "fast", "-crf", "12", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", dst]
 
 
-def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolution, key, start=0):
+def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolution, key, start=0, end=None):
     """Manifest v2: people come from face identity (swap_faces), each with a head + upper-body crop;
     `frames` are evenly spaced stills for the semantic (VLM) pass and the editor. No shots, no masks:
     the default designations (role / description / crop) need neither."""
@@ -275,7 +280,7 @@ def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolut
         "duration_s": round(seconds, 2), "duration_param": dur, "trimmed": dur > 0, "had_audio": had_audio,
         "resolution": resolution, "prepared_video": urls["cs_prepared.mp4"], "thumb": urls["cs_thumb.jpg"],
         # when the template was cut (longer than 15 s, or a start offset), swaps run on this clip
-        "source": urls.get("cs_source.mp4"), "start": start,
+        "source": urls.get("cs_source.mp4"), "start": start, "end": end,
         "frames": [{"frame": int(f), "url": urls[f"cs_f{i}.jpg"]} for i, f in enumerate(key)],
         "people": [{**p, "crop": urls[f"cs_{p['id']}_crop.png"]} for p in people],
     }
@@ -292,8 +297,9 @@ def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, 
     name = os.path.basename(job_input["media"][0]["name"])
     seconds, had_audio = _probe(os.path.join(input_dir, name))
     start = float(job_input.get("start") or 0)
+    end = float(job_input.get("end") or 0) or None
     files = []
-    cut = trim_command(os.path.join(input_dir, name), os.path.join(input_dir, "cs_source.mp4"), start, seconds)
+    cut = trim_command(os.path.join(input_dir, name), os.path.join(input_dir, "cs_source.mp4"), start, seconds, end=end)
     if cut:
         subprocess.run(cut, check=True, timeout=300)
         name = "cs_source.mp4"
@@ -323,4 +329,4 @@ def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, 
         save(original_crop(orig, orig_fps, p["frame"], p["crop_box"], (w, h)), f"cs_{p['id']}_crop.png")
     urls = dict(zip([os.path.basename(f) for f in files], upload(job_id, files)))
     return build_manifest(people, urls, frames=n, wh=(w, h), seconds=seconds, dur=dur, had_audio=had_audio,
-                          resolution=resolution, key=key, start=start)
+                          resolution=resolution, key=key, start=start, end=end)
