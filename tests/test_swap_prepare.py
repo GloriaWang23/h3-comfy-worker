@@ -154,6 +154,22 @@ class ManifestV2(unittest.TestCase):
         self.assertEqual(sp.key_frames(240, 8), [0, 34, 68, 102, 137, 171, 205, 239])
         self.assertEqual(sp.key_frames(5, 8), [0, 1, 2, 3, 4])
 
+    def test_trim_command(self):
+        self.assertIsNone(sp.trim_command("in.mp4", "out.mp4", 0, 8.0))          # nothing to cut
+        cmd = sp.trim_command("in.mp4", "out.mp4", 4.5, 20.0)
+        self.assertEqual(cmd[:2], ["ffmpeg", "-hide_banner"])
+        self.assertEqual(cmd[cmd.index("-ss") + 1], "4.500")
+        self.assertEqual(cmd[cmd.index("-t") + 1], "10.000")                       # at most 10 s kept
+        self.assertEqual(cmd[-1], "out.mp4")
+        self.assertEqual(sp.trim_command("in.mp4", "out.mp4", 0, 15.0)[sp.trim_command("in.mp4", "out.mp4", 0, 15.0).index("-t") + 1], "10.000")
+
+    def test_manifest_source_and_start(self):
+        urls = {"cs_prepared.mp4": "u/p.mp4", "cs_thumb.jpg": "u/t.jpg", "cs_f0.jpg": "u/f0.jpg", "cs_source.mp4": "u/s.mp4"}
+        m = sp.build_manifest([], urls, frames=240, wh=(608, 800), seconds=10.0, dur=0.0, had_audio=True, resolution="480", key=[0], start=4.5)
+        self.assertEqual((m["source"], m["start"]), ("u/s.mp4", 4.5))
+        m0 = sp.build_manifest([], {k: v for k, v in urls.items() if k != "cs_source.mp4"}, frames=240, wh=(608, 800), seconds=10.0, dur=0.0, had_audio=True, resolution="480", key=[0])
+        self.assertEqual((m0["source"], m0["start"]), (None, 0))
+
     def test_manifest_people_from_faces(self):
         people = [{"id": "p1", "gender": "female", "gender_conf": 1.0, "age": 28, "faces": 55, "first_frame": 0,
                    "last_frame": 171, "frame": 18, "face_box": [284, 122, 437, 325], "crop_box": [130, 20, 590, 800]}]

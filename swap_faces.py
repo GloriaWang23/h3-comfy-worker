@@ -60,7 +60,15 @@ def person_card(cluster, frame_wh):
     sexes = [d["sex"] for d in cluster]
     female = sexes.count("F")
     gender = "female" if female * 2 >= len(sexes) else "male"
-    best = max(cluster, key=lambda d: (d["bbox"][2] - d["bbox"][0]) * (d["bbox"][3] - d["bbox"][1]) * (d["score"] ** 4))
+    def quality(d):
+        # a large, clear face ... on a frame where the head + upper body fit (not cut off by the frame edge)
+        x0, y0, x1, y1 = d["bbox"]
+        fw, fh = x1 - x0, y1 - y0
+        cb = _crop_box(d["bbox"], frame_wh)
+        whole = ((cb[2] - cb[0]) * (cb[3] - cb[1])) / max(1.0, (3 * fw) * (4.5 * fh))
+        return fw * fh * (d["score"] ** 4) * min(1.0, whole) ** 2
+
+    best = max(cluster, key=quality)
     frames = [d["frame"] for d in cluster]
     return {
         "gender": gender,

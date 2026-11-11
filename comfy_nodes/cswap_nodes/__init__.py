@@ -72,5 +72,63 @@ class CSwapSAM3VideoTrack:
         return (out[0],)
 
 
-NODE_CLASS_MAPPINGS = {"CSwapSAM3Detect": CSwapSAM3Detect, "CSwapSAM3VideoTrack": CSwapSAM3VideoTrack}
-NODE_DISPLAY_NAME_MAPPINGS = {"CSwapSAM3Detect": "SAM3 Detect (cuDNN off)", "CSwapSAM3VideoTrack": "SAM3 Video Track (cuDNN off)"}
+class CSwapSeedTrack:
+    """Region mask of one known person: SAM3 point prompts on the seed frame (from the face box), then
+    tracking forward and backward from it. No text re-detection (that mixed up ids). The mask is grown
+    by `expansion_px` and frames where the person was lost are handled by `lost`."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"images": ("IMAGE",), "model": ("MODEL",),
+                             "frame": ("INT", {"default": 0, "min": 0}),
+                             "face_box": ("STRING", {"default": "[0.4, 0.1, 0.6, 0.3]", "tooltip": "normalised [x0, y0, x1, y1] of the face on the seed frame"}),
+                             "kind": (["person", "head"],),
+                             "expansion_px": ("INT", {"default": 192, "min": 0, "max": 256}),
+                             "lost": (["open", "closed"],)}}
+    RETURN_TYPES = ("MASK", "STRING")
+    RETURN_NAMES = ("mask", "report")
+    FUNCTION = "run"
+    CATEGORY = "character-swap"
+
+    def _track(self, images, model, seed_mask):
+        from comfy_extras.nodes_sam3 import SAM3_TrackToMask
+        track = SAM3_VideoTrack.execute(images=images, model=model, initial_mask=seed_mask, detection_threshold=0.5,
+                                        max_objects=1, detect_interval=1)[0]
+        return SAM3_TrackToMask.execute(track_data=track, object_indices="0")[0]
+
+    def run(self, images, model, frame, face_box, kind, expansion_px, lost):
+        import json
+        import numpy as np
+        import torch.nn.functional as F
+        from .masks import fill_lost, seed_points, stitch
+        n, h, w = images.shape[:3]
+        frame = min(frame, n - 1)
+        pos, neg = seed_points(json.loads(face_box), kind, (w, h))
+
+        def work():
+            seed = SAM3_Detect.execute(model=model, image=images[frame:frame + 1], positive_coords=json.dumps(pos),
+                                       negative_coords=json.dumps(neg) if neg else None, threshold=0.35,
+                                       refine_iterations=2, individual_masks=True)[0][:1]
+            fwd = self._track(images[frame:], model, seed)
+            bwd = self._track(torch.flip(images[:frame + 1], dims=[0]), model, seed) if frame > 0 else None
+            return fwd, bwd
+
+        try:
+            fwd, bwd = work()
+        except RuntimeError as e:      # the cuDNN frontend error seen with SAM3 text detection on this image
+            if "cudnn" not in str(e).lower():
+                raise
+            with no_cudnn():
+                fwd, bwd = work()
+        mask, lost_frames = fill_lost(stitch(fwd.float().cpu().numpy(), None if bwd is None else bwd.float().cpu().numpy(), frame, n), lost)
+        out = torch.from_numpy(mask.astype(np.float32))
+        if expansion_px:
+            k = 2 * int(expansion_px) + 1
+            out = F.max_pool2d(out[:, None], kernel_size=k, stride=1, padding=int(expansion_px))[:, 0]
+        report = json.dumps({"seed_frame": frame, "kind": kind, "lost_frames": len(lost_frames), "lost": lost,
+                             "first_lost": lost_frames[:10]})
+        return {"result": (out, report), "ui": {"text": [report]}}
+
+
+NODE_CLASS_MAPPINGS = {"CSwapSAM3Detect": CSwapSAM3Detect, "CSwapSAM3VideoTrack": CSwapSAM3VideoTrack, "CSwapSeedTrack": CSwapSeedTrack}
+NODE_DISPLAY_NAME_MAPPINGS = {"CSwapSAM3Detect": "SAM3 Detect (cuDNN off)", "CSwapSAM3VideoTrack": "SAM3 Video Track (cuDNN off)", "CSwapSeedTrack": "Seed Track Mask (face seed, both directions)"}

@@ -249,7 +249,17 @@ def key_frames(n, count=8):
     return [int(round(i * (n - 1) / (count - 1))) for i in range(count)]
 
 
-def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolution, key):
+def trim_command(src, dst, start, seconds, keep=10.0):
+    """ffmpeg command that keeps `keep` seconds from `start` (re-encoded near-losslessly, audio kept),
+    or None when the clip is already short enough and starts at 0."""
+    if start <= 0 and seconds <= MAX_SECONDS:
+        return None
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss", f"{max(0.0, start):.3f}", "-i", src,
+            "-t", f"{keep:.3f}", "-c:v", "libx264", "-preset", "fast", "-crf", "12", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", dst]
+
+
+def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolution, key, start=0):
     """Manifest v2: people come from face identity (swap_faces), each with a head + upper-body crop;
     `frames` are evenly spaced stills for the semantic (VLM) pass and the editor. No shots, no masks:
     the default designations (role / description / crop) need neither."""
@@ -258,6 +268,8 @@ def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolut
         "source_frames": int(frames), "fps": 24, "width": int(wh[0]), "height": int(wh[1]),
         "duration_s": round(seconds, 2), "duration_param": dur, "trimmed": dur > 0, "had_audio": had_audio,
         "resolution": resolution, "prepared_video": urls["cs_prepared.mp4"], "thumb": urls["cs_thumb.jpg"],
+        # when the template was cut (longer than 10 s, or a start offset), swaps run on this clip
+        "source": urls.get("cs_source.mp4"), "start": start,
         "frames": [{"frame": int(f), "url": urls[f"cs_f{i}.jpg"]} for i, f in enumerate(key)],
         "people": [{**p, "crop": urls[f"cs_{p['id']}_crop.png"]} for p in people],
     }
@@ -270,8 +282,17 @@ def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, 
     import swap_faces
     if not wait_ready(comfy_url):
         raise RuntimeError("ComfyUI did not come up")
+    import subprocess
     name = os.path.basename(job_input["media"][0]["name"])
     seconds, had_audio = _probe(os.path.join(input_dir, name))
+    start = float(job_input.get("start") or 0)
+    files = []
+    cut = trim_command(os.path.join(input_dir, name), os.path.join(input_dir, "cs_source.mp4"), start, seconds)
+    if cut:
+        subprocess.run(cut, check=True, timeout=300)
+        name = "cs_source.mp4"
+        files.append(os.path.join(input_dir, name))
+        seconds, had_audio = _probe(os.path.join(input_dir, name))
     dur = duration_param(seconds)
     comfy_run(build_prepare_graph(name, resolution, dur), comfy_url)
     saved = sorted(glob.glob(os.path.join(output_dir, "**", "cs_prepared*.mp4"), recursive=True))[-1]
@@ -281,7 +302,7 @@ def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, 
     n, h, w = frames.shape[:3]
     people = swap_faces.people_from_faces(swap_faces.detect_faces(frames), (w, h))
     orig, orig_fps = _decode(os.path.join(input_dir, name)), _fps(os.path.join(input_dir, name))
-    files = [prepared]
+    files.append(prepared)
 
     def save(arr, fname, **kw):
         path = os.path.join(output_dir, fname)
@@ -296,4 +317,4 @@ def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, 
         save(original_crop(orig, orig_fps, p["frame"], p["crop_box"], (w, h)), f"cs_{p['id']}_crop.png")
     urls = dict(zip([os.path.basename(f) for f in files], upload(job_id, files)))
     return build_manifest(people, urls, frames=n, wh=(w, h), seconds=seconds, dur=dur, had_audio=had_audio,
-                          resolution=resolution, key=key)
+                          resolution=resolution, key=key, start=start)

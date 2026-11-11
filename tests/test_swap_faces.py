@@ -57,6 +57,11 @@ class Person(unittest.TestCase):
         p = sf.person_card(c, (608, 800))
         self.assertEqual(p["frame"], 30)
 
+    def test_best_frame_prefers_the_whole_person_in_frame(self):
+        # same face size and score: at the bottom edge the upper body is cut off, mid-frame it is whole
+        c = [det(10, 1, "F", bbox=(250, 640, 350, 760), k=1), det(40, 1, "F", bbox=(250, 200, 350, 320), k=2)]
+        self.assertEqual(sf.person_card(c, (608, 800))["frame"], 40)
+
     def test_crop_is_head_and_upper_body_inside_frame(self):
         p = sf.person_card([det(0, 1, "F", bbox=(500, 20, 600, 140), k=1)], (608, 800))
         x0, y0, x1, y1 = p["crop_box"]
