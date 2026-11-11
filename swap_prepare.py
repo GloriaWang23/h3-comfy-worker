@@ -92,14 +92,17 @@ def concat_masks(parts, total):
 # ----------------------------------------------------------------------------------------------
 # prepare flow: ComfyUI graphs + manifest
 
-MAX_SECONDS = 10.5      # longer templates keep their first 10 s (H3 Relay trims to its 17n+5 grid)
+# MiniMax H3 generates at most 362 frames (17n+5 grid) = 15.08 s at 24 fps in one go; templates use up
+# to that. Longer videos keep 15 s (from the chosen start).
+KEEP_SECONDS = 15.0
+MAX_SECONDS = 15.5
 MAX_OBJECTS = 3
 SAM_FILE = "sam3.1_multiplex_fp16.safetensors"
 
 
 def duration_param(seconds):
-    """H3RelayPrepareSource duration_seconds for a template: 0 = whole clip, 10 = first 10 s."""
-    return 0.0 if seconds <= MAX_SECONDS else 10.0
+    """H3RelayPrepareSource duration_seconds for a template: 0 = whole clip, else the first 15 s."""
+    return 0.0 if seconds <= MAX_SECONDS else KEEP_SECONDS
 
 
 def build_prepare_graph(video, resolution, duration_seconds):
@@ -242,14 +245,17 @@ def _probe(path):
         return secs, len(c.streams.audio) > 0
 
 
-def key_frames(n, count=8):
-    """`count` evenly spaced frame indices including the first and the last (all frames if fewer)."""
+def key_frames(n, count=None):
+    """`count` evenly spaced frame indices including the first and the last (all frames if fewer).
+    Default: 8 stills up to ~10 s, 12 for longer clips (the VLM takes at most 16 images with crops)."""
+    if count is None:
+        count = 8 if n <= 250 else 12
     if n <= count:
         return list(range(n))
     return [int(round(i * (n - 1) / (count - 1))) for i in range(count)]
 
 
-def trim_command(src, dst, start, seconds, keep=10.0):
+def trim_command(src, dst, start, seconds, keep=KEEP_SECONDS):
     """ffmpeg command that keeps `keep` seconds from `start` (re-encoded near-losslessly, audio kept),
     or None when the clip is already short enough and starts at 0."""
     if start <= 0 and seconds <= MAX_SECONDS:
@@ -268,7 +274,7 @@ def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolut
         "source_frames": int(frames), "fps": 24, "width": int(wh[0]), "height": int(wh[1]),
         "duration_s": round(seconds, 2), "duration_param": dur, "trimmed": dur > 0, "had_audio": had_audio,
         "resolution": resolution, "prepared_video": urls["cs_prepared.mp4"], "thumb": urls["cs_thumb.jpg"],
-        # when the template was cut (longer than 10 s, or a start offset), swaps run on this clip
+        # when the template was cut (longer than 15 s, or a start offset), swaps run on this clip
         "source": urls.get("cs_source.mp4"), "start": start,
         "frames": [{"frame": int(f), "url": urls[f"cs_f{i}.jpg"]} for i, f in enumerate(key)],
         "people": [{**p, "crop": urls[f"cs_{p['id']}_crop.png"]} for p in people],

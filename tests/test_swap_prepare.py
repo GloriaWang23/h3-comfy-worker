@@ -101,9 +101,10 @@ class Graphs(unittest.TestCase):
         self.assertNotIn("SAM3_VideoTrack", types_)
 
     def test_duration_param(self):
+        # up to MiniMax H3's single-generation maximum (362 frames = 15.08 s at 24 fps) the whole clip is used
         self.assertEqual(sp.duration_param(9.9), 0.0)
-        self.assertEqual(sp.duration_param(10.5), 0.0)
-        self.assertEqual(sp.duration_param(14.0), 10.0)
+        self.assertEqual(sp.duration_param(15.2), 0.0)
+        self.assertEqual(sp.duration_param(20.0), 15.0)
 
 
 class People(unittest.TestCase):
@@ -153,15 +154,20 @@ class ManifestV2(unittest.TestCase):
     def test_key_frames_even_and_include_ends(self):
         self.assertEqual(sp.key_frames(240, 8), [0, 34, 68, 102, 137, 171, 205, 239])
         self.assertEqual(sp.key_frames(5, 8), [0, 1, 2, 3, 4])
+        # longer clips get more stills for the semantic pass: 8 up to ~10 s, 12 beyond
+        self.assertEqual(len(sp.key_frames(240)), 8)
+        self.assertEqual(len(sp.key_frames(362)), 12)
 
     def test_trim_command(self):
         self.assertIsNone(sp.trim_command("in.mp4", "out.mp4", 0, 8.0))          # nothing to cut
         cmd = sp.trim_command("in.mp4", "out.mp4", 4.5, 20.0)
         self.assertEqual(cmd[:2], ["ffmpeg", "-hide_banner"])
         self.assertEqual(cmd[cmd.index("-ss") + 1], "4.500")
-        self.assertEqual(cmd[cmd.index("-t") + 1], "10.000")                       # at most 10 s kept
+        self.assertEqual(cmd[cmd.index("-t") + 1], "15.000")                       # at most 15 s kept
         self.assertEqual(cmd[-1], "out.mp4")
-        self.assertEqual(sp.trim_command("in.mp4", "out.mp4", 0, 15.0)[sp.trim_command("in.mp4", "out.mp4", 0, 15.0).index("-t") + 1], "10.000")
+        self.assertIsNone(sp.trim_command("in.mp4", "out.mp4", 0, 15.0))         # 15 s fits: nothing to cut
+        long = sp.trim_command("in.mp4", "out.mp4", 0, 40.0)
+        self.assertEqual(long[long.index("-t") + 1], "15.000")
 
     def test_manifest_source_and_start(self):
         urls = {"cs_prepared.mp4": "u/p.mp4", "cs_thumb.jpg": "u/t.jpg", "cs_f0.jpg": "u/f0.jpg", "cs_source.mp4": "u/s.mp4"}
