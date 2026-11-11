@@ -1,0 +1,49 @@
+name: sync vlm38 model
+
+# Copies the Qwen3.8 VLM the vlm-qwen38 endpoint caches into our own public Hugging Face repo
+# (GloriaWang23/vlm-qwen38-27b-abl-nvfp4), from a pinned source commit: huihui's abliterated
+# Qwen3.8-27B, NVFP4 quantised by lyf (the weights the dataset pipeline validated, vLLM 0.31).
+# The endpoint pins a commit of the copy, so nothing changes for it until its MODEL_REVISION and
+# model reference are moved to the commit this prints. Needs the secret HF_TOKEN.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SOURCE: lyf/Qwen3.8-27B-Huihui-Abliterated-NVFP4-MTP-VL
+      SOURCE_REV: 3e2cce29563f3a48deff65f153597f9cc3a887cf
+      TARGET: GloriaWang23/vlm-qwen38-27b-abl-nvfp4
+    steps:
+      - name: Disk
+        run: |
+          sudo mkdir -p /mnt/models && sudo chown "$USER" /mnt/models
+          df -h / /mnt
+
+      - run: pip install -q -U "huggingface_hub[hf_xet]"
+
+      - name: Copy snapshot
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        shell: python
+        run: |
+          import os
+          from huggingface_hub import HfApi, snapshot_download
+
+          api = HfApi()
+          src, rev, target = os.environ["SOURCE"], os.environ["SOURCE_REV"], os.environ["TARGET"]
+          path = snapshot_download(src, revision=rev, local_dir="/mnt/models/snap")
+          total = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(path) for f in fs)
+          print(f"downloaded {src}@{rev[:8]}: {total / 1e9:.2f} GB", flush=True)
+          api.create_repo(target, repo_type="model", private=False, exist_ok=True)
+          c = api.upload_folder(repo_id=target, folder_path=path, ignore_patterns=[".cache/**"],
+                                commit_message=f"Copy of {src}@{rev}")
+          print(f"NEW COMMIT {c.oid}")
+          for f in api.list_repo_tree(target, recursive=True):
+              if getattr(f, "size", None):
+                  print(f"  {f.path}  {f.size / 1e9:.2f} GB")
