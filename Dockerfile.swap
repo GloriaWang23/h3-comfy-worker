@@ -24,21 +24,15 @@ COPY comfy_nodes/cswap_nodes /comfyui/custom_nodes/cswap_nodes
 
 # 3. Face identity for template preprocessing (swap_faces.py): insightface (SCRFD + ArcFace +
 #    genderage, the buffalo_l pack) on onnxruntime CPU -- about 80 frames per template, no GPU
-#    contention with ComfyUI, no CUDA-version coupling. insightface compiles a small Cython
-#    extension: it needs a C++ compiler and the interpreter's headers. Models are baked in.
+#    contention with ComfyUI, no CUDA-version coupling. Both install as wheels. The model pack is
+#    baked in (downloaded with Python: the image has no curl / unzip).
 ARG INSIGHTFACE_VERSION=2.1
 ARG ONNXRUNTIME_VERSION=1.31.1
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends g++ unzip "python$(python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')-dev" \
-    && rm -rf /var/lib/apt/lists/* \
-    && uv pip install "insightface==${INSIGHTFACE_VERSION}" "onnxruntime==${ONNXRUNTIME_VERSION}" \
+RUN uv pip install "insightface==${INSIGHTFACE_VERSION}" "onnxruntime==${ONNXRUNTIME_VERSION}" \
     && rm -rf /root/.cache \
-    && mkdir -p /opt/insightface/models/buffalo_l \
-    && curl -fsSL -o /tmp/buffalo_l.zip https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip \
-    && unzip -q -j /tmp/buffalo_l.zip -d /opt/insightface/models/buffalo_l \
-    && rm /tmp/buffalo_l.zip \
-    && ls -la /opt/insightface/models/buffalo_l \
-    && test -f /opt/insightface/models/buffalo_l/w600k_r50.onnx
+    && python -c "import io, os, urllib.request, zipfile; d = '/opt/insightface/models/buffalo_l'; os.makedirs(d); z = zipfile.ZipFile(io.BytesIO(urllib.request.urlopen('https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip', timeout=300).read())); [open(os.path.join(d, os.path.basename(n)), 'wb').write(z.read(n)) for n in z.namelist() if n.endswith('.onnx')]; print(sorted(os.listdir(d)))" \
+    && test -f /opt/insightface/models/buffalo_l/w600k_r50.onnx \
+    && test -f /opt/insightface/models/buffalo_l/det_10g.onnx
 ENV INSIGHTFACE_HOME=/opt/insightface
 
 COPY h3_handler.py /h3_handler.py
