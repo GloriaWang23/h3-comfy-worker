@@ -149,6 +149,26 @@ class Ready(unittest.TestCase):
         self.assertIn("attn(q, k, v)", msg)
 
 
+class ManifestV2(unittest.TestCase):
+    def test_key_frames_even_and_include_ends(self):
+        self.assertEqual(sp.key_frames(240, 8), [0, 34, 68, 102, 137, 171, 205, 239])
+        self.assertEqual(sp.key_frames(5, 8), [0, 1, 2, 3, 4])
+
+    def test_manifest_people_from_faces(self):
+        people = [{"id": "p1", "gender": "female", "gender_conf": 1.0, "age": 28, "faces": 55, "first_frame": 0,
+                   "last_frame": 171, "frame": 18, "face_box": [284, 122, 437, 325], "crop_box": [130, 20, 590, 800]}]
+        urls = {"cs_prepared.mp4": "u/p.mp4", "cs_thumb.jpg": "u/t.jpg", "cs_p1_crop.png": "u/c1.png",
+                "cs_f0.jpg": "u/f0.jpg", "cs_f1.jpg": "u/f1.jpg"}
+        m = sp.build_manifest(people, urls, frames=240, wh=(608, 800), seconds=10.03, dur=0.0, had_audio=True,
+                              resolution="480", key=[0, 239])
+        self.assertEqual(m["version"], 2)
+        self.assertEqual(m["people"][0]["crop"], "u/c1.png")
+        self.assertEqual(m["people"][0]["gender"], "female")
+        self.assertEqual(m["frames"], [{"frame": 0, "url": "u/f0.jpg"}, {"frame": 239, "url": "u/f1.jpg"}])
+        self.assertEqual((m["thumb"], m["prepared_video"], m["source_frames"]), ("u/t.jpg", "u/p.mp4", 240))
+        self.assertNotIn("shots", m)
+
+
 class MaskPlan(unittest.TestCase):
     def test_mask_plan_build(self):
         d = tempfile.mkdtemp()

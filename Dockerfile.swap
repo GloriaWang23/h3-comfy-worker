@@ -22,9 +22,30 @@ RUN printf '  checkpoints: checkpoints/\n' >> /comfyui/extra_model_paths.yaml \
 # 2b. character-swap helper nodes (SAM3 with cuDNN off, see the package docstring).
 COPY comfy_nodes/cswap_nodes /comfyui/custom_nodes/cswap_nodes
 
+# 3. Face identity for template preprocessing (swap_faces.py): insightface (SCRFD + ArcFace +
+#    genderage, the buffalo_l pack) on onnxruntime CPU -- about 80 frames per template, no GPU
+#    contention with ComfyUI, no CUDA-version coupling. insightface compiles a small Cython
+#    extension: it needs a C++ compiler and the interpreter's headers. Models are baked in.
+ARG INSIGHTFACE_VERSION=2.1
+ARG ONNXRUNTIME_VERSION=1.31.1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends g++ unzip "python$(python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')-dev" \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv pip install "insightface==${INSIGHTFACE_VERSION}" "onnxruntime==${ONNXRUNTIME_VERSION}" \
+    && rm -rf /root/.cache \
+    && mkdir -p /opt/insightface/models/buffalo_l \
+    && curl -fsSL -o /tmp/buffalo_l.zip https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip \
+    && unzip -q -j /tmp/buffalo_l.zip -d /opt/insightface/models/buffalo_l \
+    && rm /tmp/buffalo_l.zip \
+    && ls -la /opt/insightface/models/buffalo_l \
+    && test -f /opt/insightface/models/buffalo_l/w600k_r50.onnx
+ENV INSIGHTFACE_HOME=/opt/insightface
+
 COPY h3_handler.py /h3_handler.py
 COPY swap_prepare.py /swap_prepare.py
-RUN cd / && python -c "import swap_prepare, av, PIL; print('swap_prepare ok')"
+COPY swap_faces.py /swap_faces.py
+# Import check, and one real face pass on a blank frame (loads the three models, finds no face).
+RUN cd / && python -c "import numpy as np, swap_prepare, swap_faces, av, PIL; assert swap_faces.detect_faces(np.zeros((1, 480, 480, 3), np.uint8)) == []; import torch; print('swap ok, torch', torch.__version__, 'numpy', np.__version__)"
 
 # Build-time smoke test: the custom node must import and register on CPU.
 RUN cd /comfyui && timeout 300 python main.py --quick-test-for-ci --cpu 2>&1 | tee /tmp/quick.log \

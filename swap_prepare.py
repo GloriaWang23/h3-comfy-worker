@@ -242,10 +242,32 @@ def _probe(path):
         return secs, len(c.streams.audio) > 0
 
 
+def key_frames(n, count=8):
+    """`count` evenly spaced frame indices including the first and the last (all frames if fewer)."""
+    if n <= count:
+        return list(range(n))
+    return [int(round(i * (n - 1) / (count - 1))) for i in range(count)]
+
+
+def build_manifest(people, urls, *, frames, wh, seconds, dur, had_audio, resolution, key):
+    """Manifest v2: people come from face identity (swap_faces), each with a head + upper-body crop;
+    `frames` are evenly spaced stills for the semantic (VLM) pass and the editor. No shots, no masks:
+    the default designations (role / description / crop) need neither."""
+    return {
+        "version": 2,
+        "source_frames": int(frames), "fps": 24, "width": int(wh[0]), "height": int(wh[1]),
+        "duration_s": round(seconds, 2), "duration_param": dur, "trimmed": dur > 0, "had_audio": had_audio,
+        "resolution": resolution, "prepared_video": urls["cs_prepared.mp4"], "thumb": urls["cs_thumb.jpg"],
+        "frames": [{"frame": int(f), "url": urls[f"cs_f{i}.jpg"]} for i, f in enumerate(key)],
+        "people": [{**p, "crop": urls[f"cs_{p['id']}_crop.png"]} for p in people],
+    }
+
+
 def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, resolution="480"):
-    """task "prepare": template video (input.media[0]) -> manifest (see the plan, Task 3)."""
+    """task "prepare": template video (input.media[0]) -> manifest v2 (people by face identity)."""
     import glob, os
     from PIL import Image
+    import swap_faces
     if not wait_ready(comfy_url):
         raise RuntimeError("ComfyUI did not come up")
     name = os.path.basename(job_input["media"][0]["name"])
@@ -253,35 +275,25 @@ def run_prepare(job_input, job_id, *, input_dir, output_dir, upload, comfy_url, 
     dur = duration_param(seconds)
     comfy_run(build_prepare_graph(name, resolution, dur), comfy_url)
     saved = sorted(glob.glob(os.path.join(output_dir, "**", "cs_prepared*.mp4"), recursive=True))[-1]
-    prepared = "cs_prepared.mp4"
-    os.replace(saved, os.path.join(input_dir, prepared))
-    frames = _decode(os.path.join(input_dir, prepared))
+    prepared = os.path.join(input_dir, "cs_prepared.mp4")
+    os.replace(saved, prepared)
+    frames = _decode(prepared)
     n, h, w = frames.shape[:3]
+    people = swap_faces.people_from_faces(swap_faces.detect_faces(frames), (w, h))
     orig, orig_fps = _decode(os.path.join(input_dir, name)), _fps(os.path.join(input_dir, name))
-    files, shots = [os.path.join(input_dir, prepared)], []
-    for s, (start, end) in enumerate(detect_shots(frames)):
-        prefix = f"cs_s{s}"
-        comfy_run(build_shot_graph(prepared, start, end - start, prefix), comfy_url)
-        masks = {}
-        for i in range(MAX_OBJECTS):
-            with np.load(os.path.join(output_dir, f"{prefix}_o{i}.npz"), allow_pickle=False) as z:
-                masks[i] = z["mask"]
-        thumb = os.path.join(output_dir, f"{prefix}_thumb.jpg")
-        Image.fromarray(frames[start]).save(thumb, quality=88)
-        files.append(thumb)
-        people = []
-        for p in people_from_masks(masks, frames[start:end]):
-            p.pop("crop")
-            crop = os.path.join(output_dir, f"{prefix}_o{p['obj']}_crop.png")
-            Image.fromarray(original_crop(orig, orig_fps, start + p["frame"], p["bbox"], (w, h))).save(crop)
-            files += [crop, os.path.join(output_dir, f"{prefix}_o{p['obj']}.npz")]
-            people.append({**p, "crop": os.path.basename(crop), "mask": f"{prefix}_o{p['obj']}.npz"})
-        shots.append({"start": start, "end": end, "thumb": os.path.basename(thumb), "people": people})
+    files = [prepared]
+
+    def save(arr, fname, **kw):
+        path = os.path.join(output_dir, fname)
+        Image.fromarray(np.ascontiguousarray(arr)).save(path, **kw)
+        files.append(path)
+
+    save(frames[0], "cs_thumb.jpg", quality=88)
+    key = key_frames(n)
+    for i, f in enumerate(key):
+        save(frames[f], f"cs_f{i}.jpg", quality=90)
+    for p in people:   # crops come from the original video: sharper than the prepared frames
+        save(original_crop(orig, orig_fps, p["frame"], p["crop_box"], (w, h)), f"cs_{p['id']}_crop.png")
     urls = dict(zip([os.path.basename(f) for f in files], upload(job_id, files)))
-    for sh in shots:
-        sh["thumb"] = urls[sh["thumb"]]
-        for p in sh["people"]:
-            p["crop"], p["mask"] = urls[p["crop"]], urls[p["mask"]]
-    return {"source_frames": int(n), "fps": 24, "width": int(w), "height": int(h), "duration_s": round(seconds, 2),
-            "duration_param": dur, "trimmed": dur > 0, "had_audio": had_audio, "resolution": resolution,
-            "prepared_video": urls[prepared], "shots": shots}
+    return build_manifest(people, urls, frames=n, wh=(w, h), seconds=seconds, dur=dur, had_audio=had_audio,
+                          resolution=resolution, key=key)
