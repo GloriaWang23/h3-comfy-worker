@@ -7,7 +7,7 @@ experiments: `character-swap/RESULTS.md`; smoke: `character-swap/tools/smoke_swa
 |---|---|
 | endpoint | `character-swap` — `sxzztytrk1vudj` |
 | template | `character-swap-template` — `lxtihcgb1l` |
-| image | `ghcr.io/gloriawang23/character-swap-worker:sha-b3772aa` (Dockerfile.swap: H3 image sha-0454363 + h3-relay e2a7665 + cswap_nodes incl. CSwapSeedTrack + insightface buffalo_l + swap_prepare.py / swap_faces.py) |
+| image | `ghcr.io/gloriawang23/character-swap-worker:sha-f72bbac` (Dockerfile.swap: H3 image sha-0454363 + h3-relay e2a7665 + cswap_nodes incl. CSwapSeedTrack + insightface buffalo_l + swap_prepare.py / swap_faces.py) |
 | GPU | RTX 5090, CUDA ≥ 13.0 |
 | workers | min 0 / max 1, FlashBoot, queue delay 4 s |
 | timeouts | execution 1800 s (studio: prepare 1500 s, swap pass 2× estimate within 300–1800 s), idle 15 s |
