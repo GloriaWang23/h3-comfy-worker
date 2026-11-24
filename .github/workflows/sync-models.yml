@@ -39,8 +39,6 @@ jobs:
           # pinned older commits keep their files.
           #   path in target -> ("hf", source repo, file[, revision]) | ("civitai", version id, file name) | None (already there)
           WANT = {
-              # First, so a bad CIVITAI_TOKEN fails the run before anything large is copied.
-              "loras/Minimax_H3_Unlocked_V3.safetensors": ("civitai", 3446226, "Minimax_H3_Unlocked_V3.safetensors"),
               # Comfy-Org official bases, text encoder, VAEs
               "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors": None,
               "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": None,
@@ -73,6 +71,8 @@ jobs:
               "loras/HMNSFW-Extreme-Realism.safetensors":
                   ("hf", "fnjerry/HMNSFW-Extreme-Realism", "HMNSFW-Extreme-Realism.safetensors",
                    "294bc90a521c1f6342dd102ab6abd7894551bf44"),
+              # NSFW Unlocked V3 (Civitai only). Last: needs a valid CIVITAI_TOKEN.
+              "loras/Minimax_H3_Unlocked_V3.safetensors": ("civitai", 3446226, "Minimax_H3_Unlocked_V3.safetensors"),
           }
           # Files whose publisher's SHA256 is checked before they are committed.
           SHA256 = {
