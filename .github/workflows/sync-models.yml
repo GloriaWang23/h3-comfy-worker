@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # to see draft releases
+  contents: read
 
 jobs:
   sync:
@@ -23,13 +23,6 @@ jobs:
         run: |
           sudo mkdir -p /mnt/models && sudo chown "$USER" /mnt/models
           df -h / /mnt
-
-      # Optional: files a maintainer staged in a draft release (not public).
-      - name: Staged files
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download sync-staging -R "$GITHUB_REPOSITORY" -D /mnt/models/staging 2>/dev/null && ls -l /mnt/models/staging || echo "none staged"
 
       - run: pip install -q -U "huggingface_hub[hf_xet]"
 
@@ -78,8 +71,7 @@ jobs:
               "loras/HMNSFW-Extreme-Realism.safetensors":
                   ("hf", "fnjerry/HMNSFW-Extreme-Realism", "HMNSFW-Extreme-Realism.safetensors",
                    "294bc90a521c1f6342dd102ab6abd7894551bf44"),
-              # NSFW Unlocked V3 (Civitai only). Last: without a valid CIVITAI_TOKEN secret it is taken from
-              # the draft release "sync-staging" (SHA256 checked below either way).
+              # NSFW Unlocked V3 (Civitai only). Last: needs a valid CIVITAI_TOKEN.
               "loras/Minimax_H3_Unlocked_V3.safetensors": ("civitai", 3446226, "Minimax_H3_Unlocked_V3.safetensors"),
           }
           # Files whose publisher's SHA256 is checked before they are committed.
@@ -127,8 +119,6 @@ jobs:
               if src[0] == "hf":
                   path = hf_hub_download(src[1], src[2], revision=src[3] if len(src) > 3 else None, local_dir="/mnt/models/_hf")
                   shutil.move(path, local)
-              elif os.path.exists(f"/mnt/models/staging/{src[2]}"):
-                  shutil.move(f"/mnt/models/staging/{src[2]}", local)
               else:
                   civitai(src[1], src[2], local)
               if dest in SHA256:
