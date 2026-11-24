@@ -21,19 +21,29 @@ sys.exit("refusing: jobs are running or queued" if busy else 0)'
 # Template image + env through the v2 API (rest.runpod.io does not resolve everywhere). The whole
 # env is read and written back in memory; the result is read again and compared.
 KEY=$KEY IMAGE=$IMAGE SHA=$SHA CMD=$CMD TEMPLATE=$TEMPLATE python3 - <<'PY'
-import json, os, urllib.request
+import json, os, urllib.error, urllib.request
 url = f"https://api.runpod.io/v2/templates/{os.environ['TEMPLATE']}"
 op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 def call(method="GET", body=None):
     r = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body else None, headers={
         "Authorization": "Bearer " + os.environ["KEY"], "Content-Type": "application/json", "User-Agent": "curl/8"})
-    return json.loads(op.open(r, timeout=60).read() or b"{}")
+    try:
+        return json.loads(op.open(r, timeout=60).read() or b"{}")
+    except urllib.error.HTTPError as e:
+        text = e.read().decode(errors="replace")
+        for v in (body or {}).get("env", {}).values():  # never print env values
+            if len(str(v)) > 8:
+                text = text.replace(str(v), "<redacted>")
+        raise SystemExit(f"{method} template: HTTP {e.code} {text[:500]}")
 old = call()
 env = {**old["env"], "H3_MODEL_SHA": os.environ["SHA"]}
 body = {"image": os.environ["IMAGE"], "env": env}
 cmd = json.loads(os.environ["CMD"])
-if cmd or old.get("args"):
-    body["args"] = cmd
+# v2 `args` is a JSON string ("{}" = the image's own command).
+if cmd:
+    body["args"] = json.dumps({"cmd": cmd})
+elif old.get("args") not in (None, "", "{}"):
+    body["args"] = "{}"
 call("PATCH", body)
 new = call()
 assert new["image"] == os.environ["IMAGE"], f"image is {new['image']}"
