@@ -18,15 +18,30 @@ busy = j.get("inProgress", 0) + j.get("inQueue", 0)
 print(f"endpoint jobs running/queued: {busy}")
 sys.exit("refusing: jobs are running or queued" if busy else 0)'
 
-curl -s "https://rest.runpod.io/v1/templates/$TEMPLATE" -H "Authorization: Bearer $KEY" \
-  | IMAGE=$IMAGE SHA=$SHA CMD=$CMD python3 -c '
-import sys, json, os
-e = json.load(sys.stdin)["env"]
-e["H3_MODEL_SHA"] = os.environ["SHA"]
-print(json.dumps({"imageName": os.environ["IMAGE"], "dockerStartCmd": json.loads(os.environ["CMD"]), "env": e}))' \
-  | curl -s -X PATCH "https://rest.runpod.io/v1/templates/$TEMPLATE" -H "Authorization: Bearer $KEY" \
-      -H 'Content-Type: application/json' --data-binary @- \
-  | python3 -c 'import sys, json; d = json.load(sys.stdin); print("template:", d["imageName"], "| start cmd:", "custom" if d.get("dockerStartCmd") else "image default", "| H3_MODEL_SHA:", d["env"]["H3_MODEL_SHA"][:10])'
+# Template image + env through the v2 API (rest.runpod.io does not resolve everywhere). The whole
+# env is read and written back in memory; the result is read again and compared.
+KEY=$KEY IMAGE=$IMAGE SHA=$SHA CMD=$CMD TEMPLATE=$TEMPLATE python3 - <<'PY'
+import json, os, urllib.request
+url = f"https://api.runpod.io/v2/templates/{os.environ['TEMPLATE']}"
+op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def call(method="GET", body=None):
+    r = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body else None, headers={
+        "Authorization": "Bearer " + os.environ["KEY"], "Content-Type": "application/json", "User-Agent": "curl/8"})
+    return json.loads(op.open(r, timeout=60).read() or b"{}")
+old = call()
+env = {**old["env"], "H3_MODEL_SHA": os.environ["SHA"]}
+body = {"image": os.environ["IMAGE"], "env": env}
+cmd = json.loads(os.environ["CMD"])
+if cmd or old.get("args"):
+    body["args"] = cmd
+call("PATCH", body)
+new = call()
+assert new["image"] == os.environ["IMAGE"], f"image is {new['image']}"
+assert new["env"] == env, "env differs after the update: " + ", ".join(k for k in {**env, **new["env"]} if env.get(k) != new["env"].get(k))
+for k in ("disk", "ports", "serverless", "registry", "mounts"):
+    assert new.get(k) == old.get(k), f"{k} changed"
+print("template:", new["image"], "| args:", new.get("args") or "image default", "| H3_MODEL_SHA:", new["env"]["H3_MODEL_SHA"][:10], "| env keys:", len(new["env"]))
+PY
 
 runpodctl serverless update "$ENDPOINT" --model-reference "https://huggingface.co/$REPO:$SHA" \
   | python3 -c 'import sys, json; print("model cache:", json.load(sys.stdin).get("modelReferences"))'
