@@ -210,5 +210,104 @@ class Tests(unittest.TestCase):
         self.assertEqual(os.listdir(h.OUTPUT_DIR), [])
 
 
+class RefMediaTests(unittest.TestCase):
+    """prepare_refs with real ffmpeg / ffprobe on generated clips."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def clip(self, name, seconds, fps=30, size="320x240", audio=True, extra=()):
+        import subprocess
+        path = os.path.join(self.dir, name)
+        cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=s={size}:d={seconds}:r={fps}"]
+        if audio:
+            cmd += ["-f", "lavfi", "-i", f"sine=d={seconds}", "-c:a", "libopus" if name.endswith(".webm") else "aac", "-shortest"]
+        w, hgt = (int(x) for x in size.split("x"))
+        vcodec = "libvpx-vp9" if name.endswith(".webm") else "libx264" if (w % 2 == 0 and hgt % 2 == 0) else "libx264rgb"
+        cmd += ["-c:v", vcodec, *extra, path]
+        subprocess.run(cmd, check=True)
+        return path
+
+    def fps(self, path):
+        return h.probe(path)["fps"]
+
+    def test_30_and_60_fps_become_24(self):
+        for fps in (30, 60):
+            p = self.clip(f"refvideo{fps}.mp4", 3, fps=fps)
+            h.prepare_refs([p])
+            self.assertAlmostEqual(self.fps(p), 24, delta=0.05)
+            self.assertAlmostEqual(h.probe(p)["duration"], 3, delta=0.15)
+            self.assertTrue(h.probe(p)["audio"], "soundtrack kept")
+
+    def test_24_and_23976_untouched(self):
+        for fps in ("24", "24000/1001"):
+            p = self.clip(f"refvideo_{fps.replace('/', '_')}.mp4", 3, fps=fps)
+            before = os.path.getmtime(p), os.path.getsize(p)
+            h.prepare_refs([p])
+            self.assertEqual((os.path.getmtime(p), os.path.getsize(p)), before)
+
+    def test_odd_size_and_no_audio(self):
+        p = self.clip("refvideo0.mp4", 3, size="321x241", audio=False)
+        h.prepare_refs([p])
+        info = h.probe(p)
+        self.assertAlmostEqual(info["fps"], 24, delta=0.05)
+        self.assertEqual(info["audio"], [])
+
+    def test_webm(self):
+        p = self.clip("refvideo0.webm", 3, extra=())
+        h.prepare_refs([p])
+        self.assertAlmostEqual(self.fps(p), 24, delta=0.05)
+
+    def test_duration_limits(self):
+        ok = self.clip("refvideo0.mp4", 15.08, fps=24)
+        h.prepare_refs([ok])
+        too_long = self.clip("refvideo1.mp4", 20, fps=24)
+        with self.assertRaises(h.MediaError):
+            h.prepare_refs([too_long])
+        short = self.clip("refvideo2.mp4", 1, fps=24)
+        with self.assertRaises(h.MediaError):
+            h.prepare_refs([short])
+
+    def test_total_over_15(self):
+        a = self.clip("refvideo0.mp4", 9, fps=24)
+        b = self.clip("refvideo1.mp4", 9, fps=24)
+        with self.assertRaises(h.MediaError):
+            h.prepare_refs([a, b])
+
+    def test_guide_video(self):
+        p = self.clip("guidevideo.mp4", 4)
+        with self.assertRaises(h.MediaError):
+            h.prepare_refs([p], [{"name": "guidevideo.mp4", "min_seconds": 5}])
+        h.prepare_refs([p], [{"name": "guidevideo.mp4", "min_seconds": 4}])
+        self.assertAlmostEqual(self.fps(p), 24, delta=0.05)
+
+    def test_guide_without_audio_gets_silence(self):
+        p = self.clip("guidevideo.mp4", 3, fps=24, audio=False)
+        h.prepare_refs([p], [{"name": "guidevideo.mp4", "min_seconds": 3}])
+        info = h.probe(p)
+        self.assertTrue(info["audio"])
+        self.assertAlmostEqual(info["duration"], 3, delta=0.15)
+
+    def test_other_files_untouched(self):
+        p = self.clip("cs_src.mp4", 20, fps=30)
+        h.prepare_refs([p])
+        self.assertAlmostEqual(self.fps(p), 30, delta=0.05)
+
+    def test_broken_file_and_no_leftovers(self):
+        p = os.path.join(self.dir, "refvideo0.mp4")
+        open(p, "wb").write(b"not a video")
+        with self.assertRaises(h.MediaError):
+            h.prepare_refs([p])
+        q = self.clip("refvideo1.mp4", 3)
+        with mock.patch.object(h, "CONVERT_TIMEOUT_S", 0.001), self.assertRaises(h.MediaError):
+            h.prepare_refs([q])
+        self.assertEqual([f for f in os.listdir(self.dir) if f.startswith(".conv_")], [])
+
+    def test_handler_returns_media_error(self):
+        with mock.patch.object(h, "fetch_media", return_value=[self.clip("refvideo0.mp4", 20, fps=24)]):
+            r = h.h3_handler({"id": "j", "input": {"workflow": {}, "media": [{"name": "refvideo0.mp4", "url": "http://x"}]}})
+        self.assertIn("2–15", r["error"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

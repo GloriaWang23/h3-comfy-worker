@@ -71,6 +71,23 @@ jobs:
               "loras/HMNSFW-Extreme-Realism.safetensors":
                   ("hf", "fnjerry/HMNSFW-Extreme-Realism", "HMNSFW-Extreme-Realism.safetensors",
                    "294bc90a521c1f6342dd102ab6abd7894551bf44"),
+              # Swap / head-swap LoRAs for the studio's Ref2V edit mode, with their authors' turbo LoRAs
+              # (the same files and commits as the character-swap runtime repo).
+              "loras/h3_character_swap_v1.5.safetensors":
+                  ("hf", "akatz-ai/MiniMax-H3-Character-Swap-LoRA", "h3_character_swap_v1.5.safetensors",
+                   "96ea3407b230b6f7df71c58c70e31df96bd7e533"),
+              "loras/minimax_h3_character_swap_v1.1_ref2va_fro.safetensors":
+                  ("hf", "Alissonerdx/Minimax-H3-ComfyUI", "loras/minimax_h3_character_swap_v1.1_ref2va_fro.safetensors",
+                   "64244a4fdf226c8d37b8470d1893b6ba9ab54de1"),
+              "loras/minimax_h3_head_swap_v1.0_r32.safetensors":
+                  ("hf", "Alissonerdx/Minimax-H3-ComfyUI", "loras/minimax_h3_head_swap_v1.0_r32.safetensors",
+                   "64244a4fdf226c8d37b8470d1893b6ba9ab54de1"),
+              "loras/minimax_h3_dmd_ref2va_8step_turbo_pruned.safetensors":
+                  ("hf", "drbaph/MiniMax-H3-Turbo-Lora-ComfyUI", "experimental/minimax_h3_dmd_ref2va_8step_turbo_pruned.safetensors",
+                   "bb2bc497cbaca89dadd0bcf1856eed4f8275be20"),
+              "loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors":
+                  ("hf", "lightx2v/Minimax-h3-Turbo", "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+                   "30f485ed874aa44c8183348ad361c5eabad318da"),
               # NSFW Unlocked V3 (Civitai only). Last: needs a valid CIVITAI_TOKEN.
               "loras/Minimax_H3_Unlocked_V3.safetensors": ("civitai", 3446226, "Minimax_H3_Unlocked_V3.safetensors"),
           }
@@ -78,6 +95,11 @@ jobs:
           SHA256 = {
               "loras/HMNSFW-Extreme-Realism.safetensors": "55aa39239ea4b408dee601cb0fa49157ec13fe2a54eccbb2fb725b124e43c1b5",
               "loras/Minimax_H3_Unlocked_V3.safetensors": "a423ceb3363ab5bf305d99236e6acc7fddab265896e7b4a3d85778396ebc4963",
+              "loras/h3_character_swap_v1.5.safetensors": "8f2c3c3eba161df8d0c6099598b4730f641f5ce01e04cd16d2427cff8a35218f",
+              "loras/minimax_h3_character_swap_v1.1_ref2va_fro.safetensors": "ab21167bed71db99ac09527ad1f26f5f3517687ebf2e1f1bd5e91cc0bdf9b9c3",
+              "loras/minimax_h3_head_swap_v1.0_r32.safetensors": "ea97bd1a8178460661055784d63b4cb560732196fd15d5d7f33bfd214b65ab00",
+              "loras/minimax_h3_dmd_ref2va_8step_turbo_pruned.safetensors": "693f41129785f31a820d32100b698cdcc42182c27c291f37f47d1ca5f38f5c20",
+              "loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors": "08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980",
           }
           KEEP = {"README.md", ".gitattributes"}
 

@@ -181,6 +181,121 @@ def fetch_media(items):
     return paths
 
 
+# ---- reference / source media (MiniMax H3 reads every reference video as 24 fps) ------------------
+
+REF_PREFIXES = ("refvideo", "refaudio", "guidevideo")
+REF_MIN_S, REF_MAX_S, REF_TOTAL_MAX_S = 1.95, 15.2, 15.2  # 2-15 s with room for 362-frame / AAC padding
+GUIDE_MAX_S = 60.0
+FPS_LOW, FPS_HIGH = 23.95, 24.05
+PROBE_TIMEOUT_S, CONVERT_TIMEOUT_S = 15, 120
+
+
+class MediaError(ValueError):
+    """A reference file the job cannot use; the message is shown to the user."""
+
+
+def _rate(v):
+    try:
+        a, b = (v or "0/0").split("/")
+        return float(a) / float(b) if float(b) else 0.0
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def probe(path):
+    """ffprobe: duration (video stream first), average fps, decodable audio stream indexes."""
+    import json as _json
+    import subprocess
+    name = os.path.basename(path)
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                              "stream=index,codec_type,codec_name,duration,avg_frame_rate:format=duration",
+                              "-of", "json", path], capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise MediaError(f"{name}: 读取媒体信息超时")
+    if out.returncode:
+        raise MediaError(f"{name}: 无法读取（文件损坏或格式不支持）")
+    info = _json.loads(out.stdout or "{}")
+    streams = info.get("streams", [])
+    video = next((st for st in streams if st.get("codec_type") == "video"), None)
+    audio = [i for i, st in enumerate(x for x in streams if x.get("codec_type") == "audio") if st.get("codec_name")]
+    dur = None
+    for v in ((video or {}).get("duration"), (info.get("format") or {}).get("duration")):
+        try:
+            dur = float(v)
+            break
+        except (TypeError, ValueError):
+            continue
+    if dur is None or dur != dur or dur <= 0:
+        raise MediaError(f"{name}: 读不到时长")
+    return {"duration": dur, "fps": _rate((video or {}).get("avg_frame_rate")), "video": video is not None, "audio": audio}
+
+
+def to_24fps(path, info, silence=False):
+    """Re-encode to constant 24 fps H.264 / AAC in place (temp file, then os.replace). silence: a clip
+    without a usable soundtrack gets a silent one (edit jobs anchor the source audio)."""
+    import subprocess
+    import tempfile
+    name = os.path.basename(path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".mp4", prefix=".conv_")
+    os.close(fd)
+    video = ["-map", "0:v:0", "-vf", "fps=24,scale=trunc(iw/2)*2:trunc(ih/2)*2", "-fps_mode", "cfr",
+             "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12"]
+    tries = [["-map", f"0:a:{info['audio'][0]}", "-c:a", "aac", "-b:a", "192k"]] if info["audio"] else []
+    # no usable soundtrack, or it would not decode (e.g. iPhone APAC)
+    tries.append(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-map", "1:a:0", "-c:a", "aac", "-shortest"] if silence else ["-an"])
+    try:
+        for audio in tries:
+            extra_in, audio = (audio[:4], audio[4:]) if audio[:1] == ["-f"] else ([], audio)
+            cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", path, *extra_in, *video, *audio, "-f", "mp4", tmp]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=CONVERT_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                raise MediaError(f"{name}: 转换为 24 fps 超时")
+            if r.returncode == 0:
+                os.replace(tmp, path)
+                return
+            print(f"h3-handler - {name}: ffmpeg {' '.join(audio)} failed: {r.stderr.strip()[-300:]}")
+        raise MediaError(f"{name}: 转换为 24 fps 失败")
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def prepare_refs(paths, media=()):
+    """Check durations of reference / source media and convert videos to 24 fps; other files untouched.
+    A media item may carry min_seconds (the source video of an edit job must cover the output)."""
+    need = {os.path.basename(m.get("name", "")): m.get("min_seconds") for m in media}
+    totals = {"video": 0.0, "audio": 0.0}
+    for path in paths:
+        name = os.path.basename(path)
+        if not name.startswith(REF_PREFIXES):
+            continue
+        info = probe(path)
+        d = info["duration"]
+        if name.startswith("guidevideo"):
+            low = float(need.get(name) or 0)
+            if not info["video"]:
+                raise MediaError(f"{name}: 没有视频画面")
+            if d + 0.05 < low:
+                raise MediaError(f"源视频 {d:.2f} 秒，短于输出时长 {low:g} 秒")
+            if d > GUIDE_MAX_S:
+                raise MediaError(f"源视频 {d:.1f} 秒，超过 {GUIDE_MAX_S:g} 秒上限")
+        else:
+            kind = "video" if name.startswith("refvideo") else "audio"
+            if kind == "video" and not info["video"]:
+                raise MediaError(f"{name}: 没有视频画面")
+            if not REF_MIN_S <= d <= REF_MAX_S:
+                raise MediaError(f"参考{'视频' if kind == 'video' else '音频'} {d:.2f} 秒，需在 2–15 秒之间")
+            totals[kind] += d
+            if totals[kind] > REF_TOTAL_MAX_S:
+                raise MediaError(f"参考{'视频' if kind == 'video' else '音频'}合计超过 15 秒")
+        guide = name.startswith("guidevideo")
+        if info["video"] and (not FPS_LOW <= info["fps"] <= FPS_HIGH or (guide and not info["audio"])):
+            to_24fps(path, info, silence=guide)
+            print(f"h3-handler - {name}: {info['fps']:.2f} fps -> 24 fps")
+
+
 def missing_models(workflow):
     """Model files the workflow's loaders name that are not in MODELS_DIR."""
     missing = []
@@ -316,6 +431,13 @@ def h3_handler(job):
         except Exception as e:  # surfaced to the caller like the stock handler's errors
             return {"error": f"media download failed: {e}"}
         timings["media_s"] = round(time.time() - t0, 1)
+        t0 = time.time()
+        try:
+            prepare_refs(paths, media)
+        except MediaError as e:
+            return {"error": str(e)}
+        if any(os.path.basename(p).startswith(REF_PREFIXES) for p in paths):
+            timings["ref_prep_s"] = round(time.time() - t0, 1)
         done = threading.Event()
         threading.Thread(target=watch_cancel, args=(job["id"], done), daemon=True).start()
         t0 = time.time()
