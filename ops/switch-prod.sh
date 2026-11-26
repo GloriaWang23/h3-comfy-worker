@@ -70,5 +70,5 @@ for i in $(seq 1 40); do
   fi
   sleep 30
 done
-echo "WARNING: no worker log mentions image $TAG after 20 min; old workers may still serve jobs. Check the RunPod console." >&2
+echo "WARNING: no worker log mentions image $TAG after 20 min. Workers start only when a job arrives and may wait for a GPU or the model cache; submit a small job and grep the logs for \"image=$TAG\" before trusting the switch." >&2
 exit 2
