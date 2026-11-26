@@ -56,3 +56,19 @@ PY
 runpodctl serverless update "$ENDPOINT" --model-reference "https://huggingface.co/$REPO:$SHA" \
   | python3 -c 'import sys, json; print("model cache:", json.load(sys.stdin).get("modelReferences"))'
 echo "done. Workers redeploy and download the model cache (not billed) before taking jobs."
+
+# Verify instead of assuming: an idle worker on the old image can linger (workers-max 0 did not
+# always evict it, 2026-11-26). Poll the worker logs every 30 s (model-status is rate limited per
+# hour, so it is read once at the end, for information only) for up to 20 minutes.
+TAG=${IMAGE##*:}
+for i in $(seq 1 40); do
+  # the handler prints "image=sha-<full sha>" at start (images built after 2026-11-26)
+  if runpodctl serverless logs "$ENDPOINT" --since 30m 2>/dev/null | grep -q "image=$TAG"; then
+    echo "verified: a worker pulled image $TAG"
+    runpodctl serverless model-status "$ENDPOINT" 2>/dev/null | head -c 600; echo
+    exit 0
+  fi
+  sleep 30
+done
+echo "WARNING: no worker log mentions image $TAG after 20 min; old workers may still serve jobs. Check the RunPod console." >&2
+exit 2

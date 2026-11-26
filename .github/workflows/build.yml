@@ -54,6 +54,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: IMAGE_TAG=sha-${{ github.sha }}
           provenance: false
 
       - name: Disk after build

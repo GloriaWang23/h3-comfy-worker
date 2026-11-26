@@ -468,5 +468,5 @@ if COS_BUCKET:
     base.rp_upload.upload_image = upload_to_cos
 
 if __name__ == "__main__":
-    print(f"h3-handler - starting (COS upload {'on' if COS_BUCKET else 'off'})")
+    print(f"h3-handler - starting image={os.environ.get('H3_IMAGE_TAG', 'dev')} (COS upload {'on' if COS_BUCKET else 'off'})")
     base.runpod.serverless.start({"handler": h3_handler})

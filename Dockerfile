@@ -44,4 +44,8 @@ RUN chmod +x /h3_start.sh \
     && grep -q "python -u /h3_handler.py" /start.sh \
     && echo "${COMFYUI_VERSION}" > /comfyui/.h3_version
 
+# The image tag, printed at handler start so ops/switch-prod.sh can confirm a worker runs it.
+ARG IMAGE_TAG=dev
+ENV H3_IMAGE_TAG=${IMAGE_TAG}
+
 CMD ["/h3_start.sh"]
